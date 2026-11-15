@@ -53,20 +53,23 @@
 
   /* ---------- identité de la cliente ---------- */
   const params = new URLSearchParams(location.search);
+  // Mode consultation (ouvert par Nathan depuis le dashboard) : rien n'est modifiable ni gardé sur l'appareil
+  const LECTURE = params.has("lecture");
   let code = (params.get("c") || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (!code) code = store.get("phenix:last-code") || "";
+  if (!code && !LECTURE) code = store.get("phenix:last-code") || "";
   if (!code && DEMO) code = "DEMO";
-  if (code) store.set("phenix:last-code", code);
+  if (code && !LECTURE) store.set("phenix:last-code", code);
+  if (LECTURE) document.body.classList.add("lecture");
 
   const KEY_DATA = () => `phenix:data:${code}`;
   const KEY_QUEUE = () => `phenix:queue:${code}`;
 
   /* ---------- état ---------- */
-  const cached = code ? store.get(KEY_DATA()) : null;
+  const cached = code && !LECTURE ? store.get(KEY_DATA()) : null;
   const S = {
     cliente: (cached && cached.cliente) || {},
     entries: (cached && cached.entries) || {},
-    queue: (code && store.get(KEY_QUEUE())) || [],
+    queue: (code && !LECTURE && store.get(KEY_QUEUE())) || [],
     tab: "jour",
     day: today(),
     drafts: {},
@@ -80,6 +83,7 @@
   let installPrompt = null;
 
   const persist = () => {
+    if (LECTURE) return;
     store.set(KEY_DATA(), { cliente: S.cliente, entries: S.entries });
     store.set(KEY_QUEUE(), S.queue);
   };
@@ -188,7 +192,7 @@
   }
 
   function enqueue(item) {
-    if (DEMO) return;
+    if (DEMO || LECTURE) return;
     if (item.kind === "save") S.queue = S.queue.filter((q) => !(q.kind === "save" && q.date === item.date));
     if (item.kind === "profil") {
       const prev = S.queue.find((q) => q.kind === "profil");
@@ -314,6 +318,7 @@
   }
   function renderSync() {
     const el = $("#sync");
+    if (LECTURE) { el.innerHTML = 'Mode consultation<span class="demo-tag">lecture seule</span>'; return; }
     if (DEMO) { el.innerHTML = 'Méthode Phénix<span class="demo-tag">mode démo</span>'; return; }
     if (S.queue.length) {
       el.textContent = navigator.onLine
@@ -458,7 +463,7 @@
     const pal = lastBefore("palier", day); // palier en vigueur hier
     const palDays = pal ? diffDays(day, pal.date) : null;
     const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
-    const showInstall = !standalone && !store.get("phenix:install-dismissed") && off === 0;
+    const showInstall = !LECTURE && !standalone && !store.get("phenix:install-dismissed") && off === 0;
 
     let palNote = "";
     if (d.changePalier && pal && palDays < 3) {
@@ -823,10 +828,16 @@
     const nav = $("#tabs");
     if (!code) { nav.hidden = true; $("#view").innerHTML = viewGate(); return; }
     if (!S.loaded) { nav.hidden = true; $("#view").innerHTML = viewLoading(); return; }
+    if (!S.cliente.formDate && LECTURE) {
+      nav.hidden = true;
+      $("#view").innerHTML = `<section class="card empty">${esc(S.cliente.prenom || "Cette cliente")} n'a pas encore rempli son formulaire de départ.</section>`;
+      return;
+    }
     if (!S.cliente.formDate) { nav.hidden = true; $("#view").innerHTML = viewOnboarding(); return; }
     nav.hidden = false;
     const views = { progres: viewProgres, outils: viewOutils, reperes: viewReperes };
     $("#view").innerHTML = (views[S.tab] || viewJour)();
+    if (LECTURE) $("#view").querySelectorAll("input, textarea").forEach((i) => { i.disabled = true; });
   }
 
   function toast(msg) {
@@ -934,6 +945,9 @@
       if (S.tab === "outils" && !S.touched.__tools) S.tools = null;
       render(); scrollTo(0, 0); return;
     }
+
+    // en consultation, seuls les onglets et le changement de jour répondent
+    if (LECTURE && !ev.target.closest('[data-act="prev"], [data-act="next"]')) return;
 
     const chip = ev.target.closest("[data-set]");
     if (chip) {

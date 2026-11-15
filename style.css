@@ -240,4 +240,10 @@ textarea:focus { outline: none; border-color: var(--sauge); box-shadow: 0 0 0 4p
 .gate p { color: var(--foret-douce); }
 .demo-tag { display: inline-block; background: #FFE9E3; color: var(--corail-fonce); font-size: 12px; font-weight: 700; border-radius: 99px; padding: 2px 10px; margin-left: 6px; }
 
+/* Mode consultation (Nathan) : rien n'est modifiable */
+.lecture .save, .lecture [data-act="save-reperes"], .lecture [data-act="save-s1"],
+.lecture [data-act="set-prot"], .lecture [data-act="install"] { display: none !important; }
+.lecture .chip, .lecture .check, .lecture .switch button { cursor: default; }
+.lecture input:disabled, .lecture textarea:disabled { opacity: 1; -webkit-text-fill-color: var(--foret); }
+
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
