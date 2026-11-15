@@ -11,8 +11,20 @@
     poids: [30, 250], palier: [800, 5000], taille: [40, 200],
     pas: [0, 60000], kcal: [500, 6000], prot: [0, 400]
   };
-  const REP_FIELDS = { depart: [30, 250], maintKcal: [800, 5000], maintPas: [0, 60000], cibleProt: [0, 400] };
+  const PROFIL_NUM = {
+    depart: [30, 250], maintKcal: [800, 5000], maintPas: [0, 60000], cibleProt: [0, 400],
+    age: [15, 99], taille: [100, 230], poidsCible: [30, 250], moyPasS1: [0, 60000],
+    moyKcalS1: [500, 6000], objectifPas: [0, 60000]
+  };
   const JOURS_ARRIERE = 13; // on peut rattraper jusqu'à 2 semaines
+  // Niveaux d'activité selon la moyenne de pas (même grille que le calculateur de dépense calorique)
+  const NIVEAUX = [
+    { nom: "Sédentaire", pas: "Moins de 6 000 pas", min: 0, facteur: 1.2 },
+    { nom: "Activité légère", pas: "6 000 – 10 000 pas", min: 6000, facteur: 1.375 },
+    { nom: "Activité modérée", pas: "10 000 – 15 000 pas", min: 10000, facteur: 1.55 },
+    { nom: "Activité intense", pas: "15 000 – 20 000 pas", min: 15000, facteur: 1.725 },
+    { nom: "Athlète", pas: "Plus de 20 000 pas", min: 20000, facteur: 1.9 }
+  ];
 
   /* ---------- petits outils ---------- */
   const $ = (s, el = document) => el.querySelector(s);
@@ -36,6 +48,8 @@
     const n = Number(String(raw).replace(/\s/g, "").replace(",", "."));
     return Number.isFinite(n) ? n : NaN;
   };
+  const has = (v) => v !== "" && v !== null && v !== undefined;
+  const inputVal = (v) => (typeof v === "number" ? fr(v).replace(/\s/g, "") : (v ?? ""));
 
   /* ---------- identité de la cliente ---------- */
   const params = new URLSearchParams(location.search);
@@ -57,7 +71,8 @@
     day: today(),
     drafts: {},
     touched: {},
-    online: navigator.onLine,
+    ob: null,        // formulaire de départ en cours
+    tools: null,     // valeurs des outils (pré-remplies)
     syncing: false,
     loaded: !!cached,
     error: ""
@@ -88,19 +103,22 @@
       if (paliers[i]) e.palier = paliers[i];
       if (isSunday(d)) {
         Object.assign(e, {
-          taille: 96 - Math.floor(i / 7) * 0.7,
+          taille: Math.round((96 - Math.floor(i / 7) * 0.7) * 10) / 10,
           pas: 6200 + Math.floor(i / 7) * 450,
           kcal: 1500 + Math.floor(i / 7) * 120,
-          prot: i > 28 ? 105 : "",
           etape: etapeAt(i)
         });
-        e.taille = Math.round(e.taille * 10) / 10;
+        if (i > 28) e.prot = 105;
       }
-      if (i === 41) { delete e.poids; delete e.sommeil; delete e.forme; delete e.cc; delete e.pasOk; delete e.palOk; }
+      if (i === 41) { MATIN.concat(CHECKS).forEach((k) => delete e[k]); }
       entries[d] = e;
     }
-    S.entries = entries;
-    S.cliente = { prenom: "Catherine", depart: 78.4, maintKcal: 2200, maintPas: 8000, cibleProt: 120 };
+    S.entries = params.has("form") ? {} : entries;
+    S.cliente = params.has("form") ? { prenom: "Catherine" } : {
+      prenom: "Catherine", depart: 78.4, maintKcal: 2200, maintPas: 8000, cibleProt: 120, objectifPas: 9000,
+      sexe: "femme", age: 54, taille: 164, poidsCible: 68, motivation: "Me sentir bien dans mes vêtements et avoir plus d'énergie.",
+      formDate: start, moyPasS1: 6240, moyKcalS1: 1480
+    };
     S.loaded = true;
     persist();
   }
@@ -127,16 +145,20 @@
     if (DEMO || !code) return;
     try {
       const j = await apiGet({ action: "load", code });
-      S.cliente = j.cliente || {};
+      const cliente = j.cliente || {};
       const entries = {};
       (j.entries || []).forEach((e) => { entries[e.date] = clean(e); });
-      // les saisies pas encore envoyées gardent la priorité
-      S.queue.forEach((q) => { if (q.kind === "save") entries[q.date] = q.entry; });
+      // ce qui n'est pas encore envoyé garde la priorité
+      S.queue.forEach((q) => {
+        if (q.kind === "save") entries[q.date] = q.entry;
+        if (q.kind === "profil") Object.assign(cliente, q.profil, q.profil.form ? { formDate: S.cliente.formDate || today() } : {});
+      });
+      S.cliente = cliente;
       S.entries = entries;
       S.loaded = true;
       S.error = "";
-      // les brouillons calculés avant l'arrivée des données sont recalculés, sauf ceux déjà modifiés
       Object.keys(S.drafts).forEach((k) => { if (!S.touched[k]) delete S.drafts[k]; });
+      if (!S.touched.__tools) S.tools = null;
       persist();
     } catch (err) {
       if (err.server) {
@@ -156,7 +178,7 @@
       while (S.queue.length) {
         const q = S.queue[0];
         if (q.kind === "save") await apiPost({ action: "save", code, date: q.date, entry: q.entry });
-        if (q.kind === "reperes") await apiPost({ action: "reperes", code, reperes: q.reperes });
+        if (q.kind === "profil") await apiPost({ action: "profil", code, profil: q.profil });
         S.queue.shift();
         persist();
       }
@@ -168,10 +190,20 @@
   function enqueue(item) {
     if (DEMO) return;
     if (item.kind === "save") S.queue = S.queue.filter((q) => !(q.kind === "save" && q.date === item.date));
-    if (item.kind === "reperes") S.queue = S.queue.filter((q) => q.kind !== "reperes");
+    if (item.kind === "profil") {
+      const prev = S.queue.find((q) => q.kind === "profil");
+      if (prev) { Object.assign(prev.profil, item.profil); persist(); flush(); return; }
+    }
     S.queue.push(item);
     persist();
     flush();
+  }
+
+  function saveProfil(p) {
+    Object.assign(S.cliente, p);
+    if (p.form) { S.cliente.formDate = today(); delete S.cliente.form; }
+    persist();
+    enqueue({ kind: "profil", profil: { ...p } });
   }
 
   /* ---------- calculs ---------- */
@@ -200,6 +232,32 @@
       return { ...p, avg: win.reduce((s, q) => s + q.w, 0) / win.length };
     });
   }
+  const poidsActuel = () => {
+    const s = weightSeries();
+    return s.length ? Math.round(s[s.length - 1].avg * 10) / 10 : (has(S.cliente.depart) ? Number(S.cliente.depart) : "");
+  };
+  const objectifPas = () => Number(S.cliente.objectifPas) || Number(S.cliente.maintPas) || 8000;
+  // les cases d'hier apparaissent dès qu'un palier existe (fin de la semaine d'observation)
+  const hasPalierBefore = (day) => !!lastBefore("palier", day);
+
+  // Calculateur de dépense calorique : Mifflin-St Jeor × niveau d'activité selon les pas
+  function calcDepense(t) {
+    const age = toNum(t.age), taille = toNum(t.taille), poids = toNum(t.poids), pas = toNum(t.pas);
+    if ([age, taille, poids, pas].some((v) => v === "" || Number.isNaN(v))) return null;
+    if (age < 15 || age > 99 || taille < 100 || taille > 230 || poids <= 0 || pas < 0) return null;
+    const bmr = 10 * poids + 6.25 * taille - 5 * age + (t.sexe === "homme" ? 5 : -161);
+    let niveau = NIVEAUX[0];
+    NIVEAUX.forEach((n) => { if (pas >= n.min) niveau = n; });
+    return { bmr, niveau, tdee: bmr * niveau.facteur, imc: poids / Math.pow(taille / 100, 2), pas };
+  }
+  // Calculateur de macros : lipides 1 g/kg, protéines 1,6 g/kg, fibres 15 g / 1 000 kcal, glucides = le reste
+  function calcMacros(t) {
+    const poids = toNum(t.poids), palier = toNum(t.palier);
+    if (!(poids > 0) || !(palier > 0)) return null;
+    const lip = poids, prot = poids * 1.6;
+    return { palier, lip, prot, glu: (palier - (prot * 4 + lip * 9)) / 4, fib: (palier * 15) / 1000 };
+  }
+  const imcNote = (imc) => (imc < 18.5 ? "Insuffisance pondérale" : imc < 25 ? "Corpulence normale" : imc < 30 ? "Surpoids" : "Obésité");
 
   /* ---------- brouillon du jour ---------- */
   function draftFor(day) {
@@ -237,16 +295,18 @@
     }
     return { entry: e };
   }
-  // les cases apparaissent dès qu'un palier existe (fin de la semaine d'observation)
-  const hasPalierBefore = (day) => !!lastBefore("palier", day);
-  const sameEntry =(a, b) => JSON.stringify(a, Object.keys(a).sort()) === JSON.stringify(b, Object.keys(b).sort());
+  const sameEntry = (a, b) => JSON.stringify(a, Object.keys(a).sort()) === JSON.stringify(b, Object.keys(b).sort());
   function isDirty(day) {
     const n = normalized(draftFor(day), day);
     if (n.error) return true;
     return !sameEntry(n.entry, S.entries[day] || {});
   }
+  function saveLabel(day) {
+    const e = S.entries[day] || {};
+    return !isDirty(day) && MATIN.some((k) => e[k] !== undefined) ? "Enregistré ✓" : "Enregistrer";
+  }
 
-  /* ---------- rendu ---------- */
+  /* ---------- rendu : morceaux réutilisables ---------- */
   function renderHeader() {
     const p = S.cliente.prenom;
     $("#hello").textContent = p ? `Bonjour ${p}` : "Bonjour";
@@ -257,18 +317,19 @@
     if (DEMO) { el.innerHTML = 'Méthode Phénix<span class="demo-tag">mode démo</span>'; return; }
     if (S.queue.length) {
       el.textContent = navigator.onLine
-        ? (S.syncing ? "Envoi en cours…" : `${S.queue.length} saisie(s) en attente d'envoi`)
-        : `Hors connexion · ${S.queue.length} saisie(s) gardée(s) sur le téléphone`;
+        ? (S.syncing ? "Envoi en cours…" : `${S.queue.length} envoi(s) en attente`)
+        : `Hors connexion · ${S.queue.length} envoi(s) gardé(s) sur le téléphone`;
     } else el.textContent = "Méthode Phénix · tout est enregistré";
   }
 
   const chips = (field, values, cur, opts = {}) => `
     <div class="chips c${opts.cols || values.length}">
-      ${values.map((v) => {
+      ${values.map((v, i) => {
         const on = String(cur) === String(v);
         const alerte = on && opts.alerte && opts.alerte.includes(v);
+        const label = opts.labels ? opts.labels[i] : v;
         return `<button type="button" class="chip${opts.small ? " small" : ""}${on ? " on" : ""}${alerte ? " alerte" : ""}"
-          data-set="${field}" data-v="${esc(v)}" aria-pressed="${on}">${esc(v)}</button>`;
+          data-${opts.attr || "set"}="${field}" data-v="${esc(v)}" aria-pressed="${on}">${esc(label)}</button>`;
       }).join("")}
     </div>`;
   const checkRow = (field, on, text, sub) => `
@@ -276,13 +337,15 @@
       <span class="box" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
       <span class="txt"><b>${esc(text)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</span>
     </button>`;
-  const numField = (field, val, unit, placeholder, mode = "decimal") => `
+  const numInput = (attr, field, val, unit, placeholder, mode = "decimal") => `
     <div class="num">
-      <input data-num="${field}" inputmode="${mode}" autocomplete="off" enterkeyhint="done"
+      <input data-${attr}="${field}" inputmode="${mode}" autocomplete="off" enterkeyhint="done"
         value="${esc(val ?? "")}" placeholder="${esc(placeholder ?? "")}" aria-label="${field}">
-      <span class="unit">${unit}</span>
+      ${unit ? `<span class="unit">${unit}</span>` : ""}
     </div>`;
+  const numField = (field, val, unit, placeholder, mode) => numInput("num", field, val, unit, placeholder, mode);
 
+  /* ---------- écrans ---------- */
   function viewGate() {
     return `
       <section class="gate">
@@ -297,6 +360,94 @@
       </section>`;
   }
 
+  const viewLoading = () => `<section class="card empty">Chargement de ton suivi…</section>`;
+
+  // Formulaire de départ (semaine 1), affiché à la première ouverture
+  function viewOnboarding() {
+    if (!S.ob) S.ob = { step: 1, d: { prenom: S.cliente.prenom || "", sexe: "femme" } };
+    const d = S.ob.d;
+    if (S.ob.step === 1) {
+      return `
+        <section class="gate" style="padding-top:6px">
+          <img src="icons/icon-192.png" alt="" style="width:88px;height:88px">
+          <h1>Bienvenue dans <em>Phénix</em></h1>
+          <p>Avant de commencer, remplis ton <b>formulaire de départ</b>. Il sert à calculer ton métabolisme de base et à calibrer ton programme dès la semaine 2.</p>
+        </section>
+        <section class="card">
+          <div class="eyebrow">Formulaire de départ · 1/2</div>
+          <h2>Tes données personnelles</h2>
+          <p class="lead">Réponds du mieux que tu peux : il n'y a pas de bonne ou mauvaise réponse, juste tes données réelles.</p>
+          <div class="field">
+            <div class="label">Prénom</div>
+            <div class="num"><input data-ob="prenom" autocomplete="given-name" value="${esc(d.prenom)}" aria-label="Prénom"></div>
+          </div>
+          <div class="field">
+            <div class="label">Sexe biologique <small>pour le calcul du métabolisme</small></div>
+            ${chips("sexe", ["femme", "homme"], d.sexe, { attr: "obset", labels: ["Femme", "Homme"], small: true })}
+          </div>
+          <div class="field">
+            <div class="label">Âge</div>
+            ${numInput("ob", "age", d.age, "ans", "Ex : 52", "numeric")}
+          </div>
+          <div class="field">
+            <div class="label">Taille</div>
+            ${numInput("ob", "taille", d.taille, "cm", "Ex : 165", "numeric")}
+          </div>
+          <div class="field">
+            <div class="label">Poids actuel <small>le matin, à jeun, après les toilettes</small></div>
+            ${numInput("ob", "poids", d.poids, "kg", "Ex : 72,4")}
+          </div>
+          <button class="save" style="position:static;margin-top:14px" data-act="ob-next">Continuer</button>
+        </section>`;
+    }
+    return `
+      <section class="card">
+        <div class="eyebrow">Formulaire de départ · 2/2</div>
+        <h2>Ton objectif</h2>
+        <div class="field">
+          <div class="label">Poids cible <small>facultatif</small></div>
+          <div class="hint">Si tu ne sais pas encore, laisse vide.</div>
+          ${numInput("ob", "poidsCible", d.poidsCible, "kg", "Ex : 65")}
+        </div>
+        <div class="field">
+          <div class="label">Ce que tu veux vraiment changer</div>
+          <div class="hint">Au-delà du poids. Ex : avoir plus d'énergie, ne plus culpabiliser après un repas, me sentir bien dans mes vêtements…</div>
+          <textarea data-ob="motivation" rows="4" aria-label="Ce que tu veux vraiment changer">${esc(d.motivation || "")}</textarea>
+        </div>
+        <div class="note">Tes <b>moyennes de pas et de calories</b> se rempliront à la fin de ta semaine d'observation : l'appli te les demandera dans 7 jours.</div>
+        <button class="save" style="position:static;margin-top:14px" data-act="ob-finish">Commencer mon suivi</button>
+        <button class="btn2" data-act="ob-back">Retour</button>
+      </section>`;
+  }
+
+  function cardSemaine1() {
+    const f = S.cliente.formDate;
+    if (!f) return "";
+    const j = diffDays(today(), f);
+    if (j < 7) {
+      return `<div class="note" style="margin-bottom:14px"><b>Semaine d'observation · jour ${j + 1}/7.</b>
+        Tu ne changes rien : photographie tout ce que tu manges dans SnapCalorie, tes pas s'enregistrent tout seuls, et note ton poids ici chaque matin.</div>`;
+    }
+    if (has(S.cliente.moyPasS1) && has(S.cliente.moyKcalS1)) return "";
+    const s1 = S.drafts.__s1 || (S.drafts.__s1 = { moyPasS1: inputVal(S.cliente.moyPasS1), moyKcalS1: inputVal(S.cliente.moyKcalS1) });
+    return `
+      <section class="card week">
+        <div class="eyebrow">Formulaire de départ · fin de semaine 1</div>
+        <h2>Tes moyennes de la semaine d'observation</h2>
+        <div class="field">
+          <div class="label">Moyenne de pas par jour</div>
+          <div class="hint">Appli Santé → Activité → Pas, sur les 7 jours d'observation.</div>
+          ${numInput("s1", "moyPasS1", s1.moyPasS1, "pas", "Ex : 6 240", "numeric")}
+        </div>
+        <div class="field">
+          <div class="label">Moyenne de calories par jour</div>
+          <div class="hint">SnapCalorie → Charts → ligne « Daily Average ».</div>
+          ${numInput("s1", "moyKcalS1", s1.moyKcalS1, "kcal", "Ex : 1 780", "numeric")}
+        </div>
+        <button class="save" style="position:static;margin-top:10px" data-act="save-s1">Envoyer mes moyennes</button>
+      </section>`;
+  }
+
   function viewJour() {
     const day = S.day;
     const d = draftFor(day);
@@ -304,8 +455,7 @@
     const off = diffDays(t, day);
     const title = off === 0 ? "Aujourd'hui" : off === 1 ? "Hier" : `Il y a ${off} jours`;
     const lastW = lastBefore("poids", day);
-    const pal = lastBefore("palier", day);
-    const palHier = pal; // palier en vigueur hier (un changement d'aujourd'hui ne compte pas pour hier)
+    const pal = lastBefore("palier", day); // palier en vigueur hier
     const palDays = pal ? diffDays(day, pal.date) : null;
     const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
     const showInstall = !standalone && !store.get("phenix:install-dismissed") && off === 0;
@@ -336,7 +486,7 @@
         </div>
         <div class="field">
           <div class="label">Protéines · moyenne de la semaine <small>dès le module macros</small></div>
-          ${numField("prot", d.prot, "g", S.cliente.cibleProt ? `Cible : ${fr(S.cliente.cibleProt, 0)} g` : "Ex : 110", "numeric")}
+          ${numField("prot", d.prot, "g", has(S.cliente.cibleProt) ? `Cible : ${fr(S.cliente.cibleProt, 0)} g` : "Ex : 110", "numeric")}
         </div>
         <div class="field">
           <div class="label">Mon étape</div>
@@ -349,6 +499,7 @@
       ${showInstall ? `<div class="note" style="margin:0 0 14px;display:flex;gap:10px;align-items:center;justify-content:space-between">
         <span>📲 Installe l'appli sur ton écran d'accueil.</span>
         <button class="btn2" style="width:auto;height:40px;margin:0;padding:0 14px;white-space:nowrap" data-act="go-install">Comment ?</button></div>` : ""}
+      ${off === 0 ? cardSemaine1() : ""}
       <div class="daybar">
         <button data-act="prev" aria-label="Jour précédent" ${off >= JOURS_ARRIERE ? "disabled" : ""}>‹</button>
         <div class="daylabel"><b>${title}</b><span>${longDate(day)}</span></div>
@@ -385,8 +536,8 @@
         ${hasPalierBefore(day) ? `
         <div class="field">
           <div class="label">Hier…</div>
-          ${checkRow("pasOk", d.pasOk, "J'ai atteint mon objectif de pas", S.cliente.maintPas ? `Objectif : ${fr(S.cliente.maintPas, 0)} pas` : "8 000 pas minimum, ou ton objectif du moment")}
-          ${checkRow("palOk", d.palOk, "J'ai respecté mon palier calorique", palHier ? `${fr(palHier.value, 0)} kcal · ni beaucoup moins, ni beaucoup plus` : "")}
+          ${checkRow("pasOk", d.pasOk, "J'ai atteint mon objectif de pas", `${fr(objectifPas(), 0)} pas minimum`)}
+          ${checkRow("palOk", d.palOk, "J'ai respecté mon palier calorique", `${fr(pal.value, 0)} kcal · ni beaucoup moins, ni beaucoup plus`)}
         </div>` : ""}
 
         <div class="field">
@@ -432,7 +583,9 @@
 
   function viewProgres() {
     const series = weightSeries();
-    if (!series.length) return `<section class="card empty">Ta courbe apparaîtra après tes premières pesées.<br>Note ton poids chaque matin dans « Ma journée ».</section>`;
+    const motivation = S.cliente.motivation ? `<section class="card"><div class="eyebrow">Ce que je veux vraiment changer</div>
+      <p style="margin:6px 0 0;font:400 20px/1.35 var(--serif);font-style:italic">« ${esc(S.cliente.motivation)} »</p></section>` : "";
+    if (!series.length) return `<section class="card empty">Ta courbe apparaîtra après tes premières pesées.<br>Note ton poids chaque matin dans « Ma journée ».</section>${motivation}`;
     const depart = Number(S.cliente.depart) || series[0].w;
     const last = series[series.length - 1];
     const lossKg = depart - last.avg;
@@ -449,6 +602,7 @@
     const pas = lastBefore("pas", t, true);
     const pal = lastBefore("palier", t, true);
     const tailles = dates().filter((d) => typeof S.entries[d].taille === "number").map((d) => S.entries[d].taille);
+    const obj = objectifPas();
 
     return `
       <section class="card hero">
@@ -477,8 +631,8 @@
           <div class="tile"><b>${pasOk.filter((v) => v === 1).length}<small style="font-size:15px">/${pasOk.length}</small></b><span>jours objectif de pas atteint</span></div>
           <div class="tile"><b>${palOk.filter((v) => v === 1).length}<small style="font-size:15px">/${palOk.length}</small></b><span>jours palier respecté</span></div>
         </div>` : ""}
-        ${pal ? `<div class="note">Palier actuel : <b>${fr(pal.value, 0)} kcal</b>${S.cliente.maintKcal ? ` · maintenance optimisée : ${fr(S.cliente.maintKcal, 0)} kcal` : ""}</div>` : ""}
-        ${pas ? `<div class="note">Pas (dernière moyenne) : <b>${fr(pas.value, 0)}</b> ${pas.value >= 8000 ? "✓ objectif de 8 000 atteint" : "· objectif : 8 000 minimum"}</div>` : ""}
+        ${pal ? `<div class="note">Palier actuel : <b>${fr(pal.value, 0)} kcal</b>${has(S.cliente.maintKcal) ? ` · maintenance optimisée : ${fr(S.cliente.maintKcal, 0)} kcal` : ""}</div>` : ""}
+        ${pas ? `<div class="note">Pas (dernière moyenne) : <b>${fr(pas.value, 0)}</b> ${pas.value >= obj ? `✓ objectif de ${fr(obj, 0)} atteint` : `· objectif : ${fr(obj, 0)} minimum`}</div>` : ""}
       </section>
 
       ${tailles.length ? `<section class="card">
@@ -486,34 +640,149 @@
         <p class="lead" style="margin-top:6px">${tailles.length > 1
           ? `${fr(tailles[0])} cm → <b>${fr(tailles[tailles.length - 1])} cm</b> (${tailles[tailles.length - 1] <= tailles[0] ? "−" : "+"}${fr(Math.abs(tailles[tailles.length - 1] - tailles[0]))} cm)`
           : `Première mesure : <b>${fr(tailles[0])} cm</b>`}</p>
-      </section>` : ""}`;
+      </section>` : ""}
+      ${motivation}`;
+  }
+
+  /* ---------- Outils (calculateurs, pré-remplis avec tes données) ---------- */
+  function toolsDefaults() {
+    const c = S.cliente;
+    const pas = lastBefore("pas", today(), true);
+    const pal = lastBefore("palier", today(), true);
+    return {
+      sexe: c.sexe || "femme",
+      age: inputVal(c.age), taille: inputVal(c.taille),
+      poids: inputVal(poidsActuel()),
+      pas: inputVal(pas ? pas.value : has(c.moyPasS1) ? c.moyPasS1 : ""),
+      palier: inputVal(pal ? pal.value : has(c.maintKcal) ? c.maintKcal : "")
+    };
+  }
+
+  function tdeeResults() {
+    const r = calcDepense(S.tools);
+    if (!r) return `<div class="hint" style="margin-top:12px">Remplis âge, taille, poids et moyenne de pas pour voir ta dépense.</div>`;
+    const m = toNum(S.cliente.moyKcalS1);
+    let cas = "";
+    if (m) {
+      const tdee = Math.round(r.tdee), diff = m - tdee;
+      const txt = Math.abs(diff) <= 200
+        ? `<b>Cas 2</b> · tu manges déjà à peu près ton total (${fr(m, 0)} kcal en semaine 1). Mets-toi à ${fr(tdee, 0)} kcal et confirme avec la balance (règle des 72 h).`
+        : diff < 0
+          ? `<b>Cas 1</b> · tu manges moins que ton total (${fr(m, 0)} kcal en semaine 1). Remonte par paliers de +200 : premier palier à <b>${fr(Math.round(m / 10) * 10 + 200, 0)} kcal</b>, tiens-le 3-4 jours minimum.`
+          : `<b>Cas 3</b> · tu manges plus que ton total (${fr(m, 0)} kcal en semaine 1). Descends par paliers de −200 : premier palier à <b>${fr(Math.round(m / 10) * 10 - 200, 0)} kcal</b>, tiens-le 3-4 jours minimum.`;
+      cas = `<div class="note" style="margin-top:12px">${txt}</div>`;
+    }
+    return `
+      <div class="result">
+        <div class="eyebrow" style="margin-top:14px">Ta maintenance estimée (total théorique)</div>
+        <div class="bignum">${fr(r.tdee, 0)} <span>kcal / jour</span></div>
+        <div class="hint">Avec <b>${fr(r.pas, 0)} pas</b> par jour en moyenne : niveau <b>${r.niveau.nom.toLowerCase()}</b>. C'est une estimation : seule la balance confirme le vrai total.</div>
+      </div>
+      <div class="tiles" style="grid-template-columns:1fr 1fr;margin-top:10px">
+        <div class="tile"><b>${fr(r.bmr, 0)}</b><span>métabolisme de base (kcal, au repos)</span></div>
+        <div class="tile"><b>${fr(r.imc)}</b><span>IMC · ${imcNote(r.imc)}</span></div>
+      </div>
+      ${cas}
+      <ul class="levels">
+        ${NIVEAUX.map((n) => `<li class="${n === r.niveau ? "current" : ""}"><span><b>${n.nom}</b>${n === r.niveau ? ' <span class="demo-tag" style="margin:0">toi</span>' : ""}<small>${n.pas}</small></span><span>${fr(r.bmr * n.facteur, 0)} kcal</span></li>`).join("")}
+      </ul>`;
+  }
+
+  function macroResults() {
+    const r = calcMacros(S.tools);
+    if (!r) return `<div class="hint" style="margin-top:12px">Remplis ton poids et ton palier pour voir tes macros.</div>`;
+    const prot = Math.round(r.prot);
+    const deja = Number(S.cliente.cibleProt) === prot;
+    return `
+      <div class="macros">
+        <div class="macro m-prot"><span>Protéines</span><b>${prot} g</b></div>
+        <div class="macro m-fib"><span>Fibres</span><b>${Math.round(r.fib)} g</b></div>
+        <div class="macro m-lip"><span>Lipides</span><b>${Math.round(r.lip)} g</b></div>
+        <div class="macro m-glu"><span>Glucides</span><b>${Math.round(r.glu)} g</b></div>
+      </div>
+      <div class="hint" style="margin-top:8px">Ordre de priorité : calories, puis protéines, puis fibres, puis lipides et glucides.</div>
+      <button class="btn2" data-act="set-prot" data-v="${prot}" ${deja ? "disabled" : ""}>${deja ? `Cible protéines enregistrée : ${prot} g ✓` : `Utiliser ${prot} g comme cible protéines`}</button>`;
+  }
+
+  function viewOutils() {
+    if (!S.tools) S.tools = toolsDefaults();
+    const t = S.tools;
+    return `
+      <section class="card">
+        <div class="eyebrow">Calculateur</div>
+        <h2>Ma dépense calorique</h2>
+        <p class="lead">Pré-rempli avec ton formulaire de départ et tes dernières saisies. Tu peux modifier les valeurs.</p>
+        <div class="field">
+          <div class="label">Sexe</div>
+          ${chips("sexe", ["femme", "homme"], t.sexe, { attr: "toolset", labels: ["Femme", "Homme"], small: true })}
+        </div>
+        <div class="kv" style="margin-top:6px">
+          <div><div class="label">Âge</div>${numInput("tool", "age", t.age, "ans", "52", "numeric")}</div>
+          <div><div class="label">Taille</div>${numInput("tool", "taille", t.taille, "cm", "165", "numeric")}</div>
+        </div>
+        <div class="kv" style="margin-top:10px">
+          <div><div class="label">Poids</div>${numInput("tool", "poids", t.poids, "kg", "70")}</div>
+          <div><div class="label">Pas / jour</div>${numInput("tool", "pas", t.pas, "", "8000", "numeric")}</div>
+        </div>
+        <div id="res-tdee">${tdeeResults()}</div>
+      </section>
+
+      <section class="card">
+        <div class="eyebrow">Calculateur</div>
+        <h2>Mes macros</h2>
+        <p class="lead">Ta répartition selon ton poids et ton palier calorique, à reporter dans SnapCalorie.</p>
+        <div class="kv">
+          <div><div class="label">Poids</div>${numInput("tool", "poids", t.poids, "kg", "70")}</div>
+          <div><div class="label">Palier</div>${numInput("tool", "palier", t.palier, "kcal", "1800", "numeric")}</div>
+        </div>
+        <div id="res-macro">${macroResults()}</div>
+      </section>
+
+      <section class="card">
+        <div class="eyebrow">Fiche de décision</div>
+        <h2>La règle des 72 h</h2>
+        <p class="lead">On ne bouge jamais un palier avant 3 jours d'observation.</p>
+        <ul class="rules">
+          <li class="r-ok"><b>Le poids baisse</b><span>Ne rien faire, laisse tourner.</span></li>
+          <li><b>Le poids stagne (3-4 jours)</b><span>Ajuste ton palier de 200 kcal.</span></li>
+          <li class="r-up"><b>Il monte 1 seul jour</b><span>Ne pas réagir, observe encore 2 jours.</span></li>
+          <li class="r-up2"><b>Il monte 3 jours de suite</b><span>Reviens au palier précédent.</span></li>
+        </ul>
+        <div class="note">Mange ce que tu veux dans ta limite calorique : il n'y a pas d'aliment interdit, juste un total à respecter.</div>
+      </section>`;
   }
 
   function viewReperes() {
     const c = S.cliente;
     const r = S.drafts.__reperes || (S.drafts.__reperes = {
-      depart: c.depart ? fr(c.depart).replace(/\s/g, "") : "", maintKcal: c.maintKcal ?? "", maintPas: c.maintPas ?? "", cibleProt: c.cibleProt ?? ""
+      depart: inputVal(c.depart), objectifPas: inputVal(c.objectifPas), maintKcal: inputVal(c.maintKcal),
+      maintPas: inputVal(c.maintPas), cibleProt: inputVal(c.cibleProt)
     });
     const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
     const link = `${location.origin}${location.pathname}?c=${code}`;
     return `
       <section class="card">
-        <div class="eyebrow">À remplir une fois</div>
+        <div class="eyebrow">À mettre à jour quand ça change</div>
         <h2>Mes repères</h2>
         <div class="field">
           <div class="label">Poids de départ <small>formulaire de départ</small></div>
-          <div class="num"><input data-rep="depart" inputmode="decimal" value="${esc(r.depart)}" placeholder="Ex : 78,4" aria-label="Poids de départ"><span class="unit">kg</span></div>
+          ${numInput("rep", "depart", r.depart, "kg", "Ex : 78,4")}
+        </div>
+        <div class="field">
+          <div class="label">Mon objectif de pas actuel</div>
+          <div class="hint">Monte de 500 à 1 000 pas à la fois, jusqu'à 8 000 minimum.</div>
+          ${numInput("rep", "objectifPas", r.objectifPas, "pas", "8 000", "numeric")}
         </div>
         <div class="field">
           <div class="label">Maintenance optimisée</div>
           <div class="kv">
-            <div class="num"><input data-rep="maintKcal" inputmode="numeric" value="${esc(r.maintKcal)}" placeholder="2 200" aria-label="Maintenance kcal"><span class="unit">kcal</span></div>
-            <div class="num"><input data-rep="maintPas" inputmode="numeric" value="${esc(r.maintPas)}" placeholder="8 000" aria-label="Maintenance pas"><span class="unit">pas</span></div>
+            ${numInput("rep", "maintKcal", r.maintKcal, "kcal", "2 200", "numeric")}
+            ${numInput("rep", "maintPas", r.maintPas, "pas", "8 000", "numeric")}
           </div>
         </div>
         <div class="field">
-          <div class="label">Cible protéines <small>calculateur de macros</small></div>
-          <div class="num"><input data-rep="cibleProt" inputmode="numeric" value="${esc(r.cibleProt)}" placeholder="120" aria-label="Cible protéines"><span class="unit">g</span></div>
+          <div class="label">Cible protéines <small>onglet Outils</small></div>
+          ${numInput("rep", "cibleProt", r.cibleProt, "g", "120", "numeric")}
         </div>
         <button class="btn2" data-act="save-reperes">Enregistrer mes repères</button>
       </section>
@@ -535,7 +804,7 @@
       <section class="card">
         <h2>Mon rituel</h2>
         <ol class="steps">
-          <li><b>Chaque matin</b>, juste après ta pesée (30 s) : poids, nuit, forme d'hier, cohérences cardiaques d'hier. Palier seulement s'il change.</li>
+          <li><b>Chaque matin</b>, juste après ta pesée (30 s) : poids, nuit, forme d'hier, cohérences cardiaques d'hier, objectif de pas et palier d'hier. Palier seulement s'il change.</li>
           <li><b>Le dimanche matin</b>, avant l'atelier (2 min) : tour de taille, moyennes de la semaine et étape.</li>
           <li>Rien à noter ? Laisse vide.</li>
         </ol>
@@ -553,9 +822,11 @@
     document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === S.tab));
     const nav = $("#tabs");
     if (!code) { nav.hidden = true; $("#view").innerHTML = viewGate(); return; }
+    if (!S.loaded) { nav.hidden = true; $("#view").innerHTML = viewLoading(); return; }
+    if (!S.cliente.formDate) { nav.hidden = true; $("#view").innerHTML = viewOnboarding(); return; }
     nav.hidden = false;
-    const html = S.tab === "progres" ? viewProgres() : S.tab === "reperes" ? viewReperes() : viewJour();
-    $("#view").innerHTML = html;
+    const views = { progres: viewProgres, outils: viewOutils, reperes: viewReperes };
+    $("#view").innerHTML = (views[S.tab] || viewJour)();
   }
 
   function toast(msg) {
@@ -563,7 +834,7 @@
     t.textContent = msg;
     t.classList.add("show");
     clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => t.classList.remove("show"), 2200);
+    toast.timer = setTimeout(() => t.classList.remove("show"), 2400);
   }
 
   function refreshSaveButton() {
@@ -572,13 +843,19 @@
     b.disabled = !isDirty(S.day);
     b.textContent = saveLabel(S.day);
   }
-  function saveLabel(day) {
-    const e = S.entries[day] || {};
-    return !isDirty(day) && MATIN.some((k) => e[k] !== undefined) ? "Enregistré ✓" : "Enregistrer";
-  }
 
   /* ---------- actions ---------- */
   const LABELS = { poids: "le poids", palier: "le palier", taille: "le tour de taille", pas: "les pas", kcal: "les calories", prot: "les protéines" };
+
+  function readNums(src, keys) {
+    const out = {};
+    for (const k of keys) {
+      const n = toNum(src[k]);
+      if (Number.isNaN(n) || (n !== "" && (n < PROFIL_NUM[k][0] || n > PROFIL_NUM[k][1]))) return { error: k };
+      out[k] = n;
+    }
+    return { out };
+  }
 
   function saveDay() {
     const day = S.day;
@@ -596,25 +873,67 @@
   }
 
   function saveReperes() {
-    const r = S.drafts.__reperes || {};
-    const out = {};
-    for (const k of Object.keys(REP_FIELDS)) {
-      const n = toNum(r[k]);
-      if (Number.isNaN(n) || (n !== "" && (n < REP_FIELDS[k][0] || n > REP_FIELDS[k][1]))) { toast("Vérifie tes repères"); return; }
-      out[k] = n;
-    }
-    Object.assign(S.cliente, out);
+    const res = readNums(S.drafts.__reperes || {}, ["depart", "objectifPas", "maintKcal", "maintPas", "cibleProt"]);
+    if (res.error) { toast("Vérifie tes repères"); return; }
     delete S.drafts.__reperes;
     delete S.touched.__reperes;
-    persist();
-    enqueue({ kind: "reperes", reperes: out });
+    S.tools = null;
+    saveProfil(res.out);
     toast("Repères enregistrés ✓");
     render();
   }
 
-  document.addEventListener("click", async (ev) => {
+  function obNext() {
+    const d = S.ob.d;
+    const res = readNums({ age: d.age, taille: d.taille, depart: d.poids }, ["age", "taille", "depart"]);
+    if (!String(d.prenom || "").trim()) { toast("Indique ton prénom"); return; }
+    if (res.error || res.out.age === "" || res.out.taille === "" || res.out.depart === "") {
+      toast(res.error === "taille" ? "Taille en cm (ex : 165)" : res.error === "age" ? "Vérifie ton âge" : "Remplis âge, taille et poids");
+      return;
+    }
+    S.ob.step = 2;
+    render();
+    scrollTo(0, 0);
+  }
+
+  function obFinish() {
+    const d = S.ob.d;
+    const nums = readNums({ age: d.age, taille: d.taille, depart: d.poids, poidsCible: d.poidsCible }, ["age", "taille", "depart", "poidsCible"]);
+    if (nums.error) { toast("Vérifie le poids cible"); return; }
+    if (!String(d.motivation || "").trim()) { toast("Dis-nous ce que tu veux vraiment changer"); return; }
+    const t = today();
+    saveProfil({ prenom: String(d.prenom).trim(), sexe: d.sexe, motivation: String(d.motivation).trim(), ...nums.out, form: true });
+    // le poids du formulaire est aussi la pesée du jour
+    if (!(S.entries[t] && S.entries[t].poids !== undefined)) {
+      S.entries[t] = { ...(S.entries[t] || {}), poids: nums.out.depart };
+      delete S.drafts[t];
+      persist();
+      enqueue({ kind: "save", date: t, entry: S.entries[t] });
+    }
+    S.ob = null;
+    S.tab = "jour";
+    toast(`Bienvenue ${String(d.prenom).trim()} ✓`);
+    render();
+    scrollTo(0, 0);
+  }
+
+  function saveS1() {
+    const res = readNums(S.drafts.__s1 || {}, ["moyPasS1", "moyKcalS1"]);
+    if (res.error || res.out.moyPasS1 === "" || res.out.moyKcalS1 === "") { toast("Remplis tes deux moyennes"); return; }
+    delete S.drafts.__s1;
+    S.tools = null;
+    saveProfil(res.out);
+    toast("Moyennes envoyées à Nathan ✓");
+    render();
+  }
+
+  document.addEventListener("click", (ev) => {
     const tab = ev.target.closest("[data-tab]");
-    if (tab) { S.tab = tab.dataset.tab; render(); scrollTo(0, 0); return; }
+    if (tab) {
+      S.tab = tab.dataset.tab;
+      if (S.tab === "outils" && !S.touched.__tools) S.tools = null;
+      render(); scrollTo(0, 0); return;
+    }
 
     const chip = ev.target.closest("[data-set]");
     if (chip) {
@@ -626,6 +945,10 @@
       render();
       return;
     }
+    const ob = ev.target.closest("[data-obset]");
+    if (ob) { S.ob.d[ob.dataset.obset] = ob.dataset.v; render(); return; }
+    const ts = ev.target.closest("[data-toolset]");
+    if (ts) { S.tools[ts.dataset.toolset] = ts.dataset.v; S.touched.__tools = true; render(); return; }
 
     const chk = ev.target.closest("[data-check]");
     if (chk) {
@@ -643,6 +966,11 @@
     if (a === "next") { S.day = addDays(S.day, 1); render(); }
     if (a === "save") saveDay();
     if (a === "save-reperes") saveReperes();
+    if (a === "save-s1") saveS1();
+    if (a === "ob-next") obNext();
+    if (a === "ob-back") { S.ob.step = 1; render(); }
+    if (a === "ob-finish") obFinish();
+    if (a === "set-prot") { saveProfil({ cibleProt: Number(act.dataset.v) }); toast("Cible protéines enregistrée ✓"); $("#res-macro").innerHTML = macroResults(); }
     if (a === "toggle-palier") { const d = draftFor(S.day); d.changePalier = !d.changePalier; S.touched[S.day] = true; render(); }
     if (a === "go-install") { store.set("phenix:install-dismissed", true); S.tab = "reperes"; render(); setTimeout(() => $("#install")?.scrollIntoView({ behavior: "smooth" }), 50); }
     if (a === "install" && installPrompt) { installPrompt.prompt(); installPrompt = null; }
@@ -656,6 +984,17 @@
     const el = ev.target;
     if (el.dataset.num) { draftFor(S.day)[el.dataset.num] = el.value; S.touched[S.day] = true; refreshSaveButton(); }
     if (el.dataset.rep) { (S.drafts.__reperes ||= {})[el.dataset.rep] = el.value; S.touched.__reperes = true; }
+    if (el.dataset.s1) { (S.drafts.__s1 ||= {})[el.dataset.s1] = el.value; }
+    if (el.dataset.ob) { S.ob.d[el.dataset.ob] = el.value; }
+    if (el.dataset.tool) {
+      const k = el.dataset.tool;
+      S.tools[k] = el.value;
+      S.touched.__tools = true;
+      // le poids apparaît dans les deux calculateurs : on garde les deux champs identiques
+      document.querySelectorAll(`[data-tool="${k}"]`).forEach((o) => { if (o !== el) o.value = el.value; });
+      $("#res-tdee").innerHTML = tdeeResults();
+      $("#res-macro").innerHTML = macroResults();
+    }
   });
 
   document.addEventListener("keydown", (ev) => {
