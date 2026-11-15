@@ -6,6 +6,7 @@
   const DEMO = !API;
   const ETAPES = ["Observation", "Calibrage", "Maintenance", "Cycle A", "Cycle B", "Pause"];
   const MATIN = ["poids", "sommeil", "forme", "cc"];
+  const CHECKS = ["pasOk", "palOk"]; // cases d'hier : 1 = fait, 0 = pas fait (seulement si la journée est remplie)
   const NUM_FIELDS = {
     poids: [30, 250], palier: [800, 5000], taille: [40, 200],
     pas: [0, 60000], kcal: [500, 6000], prot: [0, 400]
@@ -83,6 +84,7 @@
         forme: [4, 4, 3, 4, 5, 4, 3][i % 7],
         cc: i < 3 ? 1 : [3, 2, 3, 3, 1, 3, 2][i % 7]
       };
+      if (i > 8) { e.pasOk = i % 5 === 0 ? 0 : 1; e.palOk = i % 6 === 0 ? 0 : 1; }
       if (paliers[i]) e.palier = paliers[i];
       if (isSunday(d)) {
         Object.assign(e, {
@@ -94,7 +96,7 @@
         });
         e.taille = Math.round(e.taille * 10) / 10;
       }
-      if (i === 41) { delete e.poids; delete e.sommeil; delete e.forme; delete e.cc; }
+      if (i === 41) { delete e.poids; delete e.sommeil; delete e.forme; delete e.cc; delete e.pasOk; delete e.palOk; }
       entries[d] = e;
     }
     S.entries = entries;
@@ -175,7 +177,7 @@
   /* ---------- calculs ---------- */
   const clean = (e) => {
     const out = {};
-    ["poids", "sommeil", "forme", "cc", "palier", "taille", "pas", "kcal", "prot"].forEach((k) => {
+    ["poids", "sommeil", "forme", "cc", "pasOk", "palOk", "palier", "taille", "pas", "kcal", "prot"].forEach((k) => {
       const n = toNum(e[k]);
       if (n !== "" && !Number.isNaN(n)) out[k] = n;
     });
@@ -205,6 +207,7 @@
       const saved = S.entries[day] || {};
       const d = {};
       Object.keys(saved).forEach((k) => { d[k] = typeof saved[k] === "number" ? fr(saved[k], 1).replace(/\s/g, "") : saved[k]; });
+      CHECKS.forEach((k) => { d[k] = saved[k] === 1; });
       if (isSunday(day) && !d.etape) {
         const prev = lastBefore("etape", day);
         if (prev) d.etape = prev.value;
@@ -227,9 +230,16 @@
       e[k] = n;
     }
     if (isSunday(day) && d.etape) e.etape = d.etape;
+    // une case non cochée vaut « non » seulement si la journée est remplie ; sinon elle reste vide
+    if (hasPalierBefore(day)) {
+      const rempli = MATIN.some((k) => e[k] !== undefined) || CHECKS.some((k) => d[k]);
+      CHECKS.forEach((k) => { if (d[k]) e[k] = 1; else if (rempli) e[k] = 0; });
+    }
     return { entry: e };
   }
-  const sameEntry = (a, b) => JSON.stringify(a, Object.keys(a).sort()) === JSON.stringify(b, Object.keys(b).sort());
+  // les cases apparaissent dès qu'un palier existe (fin de la semaine d'observation)
+  const hasPalierBefore = (day) => !!lastBefore("palier", day);
+  const sameEntry =(a, b) => JSON.stringify(a, Object.keys(a).sort()) === JSON.stringify(b, Object.keys(b).sort());
   function isDirty(day) {
     const n = normalized(draftFor(day), day);
     if (n.error) return true;
@@ -261,6 +271,11 @@
           data-set="${field}" data-v="${esc(v)}" aria-pressed="${on}">${esc(v)}</button>`;
       }).join("")}
     </div>`;
+  const checkRow = (field, on, text, sub) => `
+    <button type="button" class="check${on ? " on" : ""}" data-check="${field}" role="checkbox" aria-checked="${!!on}">
+      <span class="box" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+      <span class="txt"><b>${esc(text)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</span>
+    </button>`;
   const numField = (field, val, unit, placeholder, mode = "decimal") => `
     <div class="num">
       <input data-num="${field}" inputmode="${mode}" autocomplete="off" enterkeyhint="done"
@@ -290,6 +305,7 @@
     const title = off === 0 ? "Aujourd'hui" : off === 1 ? "Hier" : `Il y a ${off} jours`;
     const lastW = lastBefore("poids", day);
     const pal = lastBefore("palier", day);
+    const palHier = pal; // palier en vigueur hier (un changement d'aujourd'hui ne compte pas pour hier)
     const palDays = pal ? diffDays(day, pal.date) : null;
     const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
     const showInstall = !standalone && !store.get("phenix:install-dismissed") && off === 0;
@@ -366,6 +382,13 @@
           ${chips("cc", [0, 1, 2, 3], d.cc)}
         </div>
 
+        ${hasPalierBefore(day) ? `
+        <div class="field">
+          <div class="label">Hier…</div>
+          ${checkRow("pasOk", d.pasOk, "J'ai atteint mon objectif de pas", S.cliente.maintPas ? `Objectif : ${fr(S.cliente.maintPas, 0)} pas` : "8 000 pas minimum, ou ton objectif du moment")}
+          ${checkRow("palOk", d.palOk, "J'ai respecté mon palier calorique", palHier ? `${fr(palHier.value, 0)} kcal · ni beaucoup moins, ni beaucoup plus` : "")}
+        </div>` : ""}
+
         <div class="field">
           <div class="switch">
             <div>
@@ -421,6 +444,7 @@
     const t = today();
     const last7 = (k) => { const v = []; for (let i = 0; i < 7; i++) { const e = S.entries[addDays(t, -i)]; if (e && typeof e[k] === "number") v.push(e[k]); } return v; };
     const ccs = last7("cc"), som = last7("sommeil"), frm = last7("forme");
+    const pasOk = last7("pasOk"), palOk = last7("palOk");
     const moy = (a) => (a.length ? fr(a.reduce((s, v) => s + v, 0) / a.length) : "—");
     const pas = lastBefore("pas", t, true);
     const pal = lastBefore("palier", t, true);
@@ -449,6 +473,10 @@
           <div class="tile"><b>${moy(som)}</b><span>sommeil moyen /5</span></div>
           <div class="tile"><b>${moy(frm)}</b><span>forme moyenne /5</span></div>
         </div>
+        ${pasOk.length || palOk.length ? `<div class="tiles" style="margin-top:8px;grid-template-columns:1fr 1fr">
+          <div class="tile"><b>${pasOk.filter((v) => v === 1).length}<small style="font-size:15px">/${pasOk.length}</small></b><span>jours objectif de pas atteint</span></div>
+          <div class="tile"><b>${palOk.filter((v) => v === 1).length}<small style="font-size:15px">/${palOk.length}</small></b><span>jours palier respecté</span></div>
+        </div>` : ""}
         ${pal ? `<div class="note">Palier actuel : <b>${fr(pal.value, 0)} kcal</b>${S.cliente.maintKcal ? ` · maintenance optimisée : ${fr(S.cliente.maintKcal, 0)} kcal` : ""}</div>` : ""}
         ${pas ? `<div class="note">Pas (dernière moyenne) : <b>${fr(pas.value, 0)}</b> ${pas.value >= 8000 ? "✓ objectif de 8 000 atteint" : "· objectif : 8 000 minimum"}</div>` : ""}
       </section>
@@ -594,6 +622,15 @@
       const f = chip.dataset.set;
       const v = f === "etape" ? chip.dataset.v : Number(chip.dataset.v);
       d[f] = String(d[f]) === String(v) ? "" : v;
+      S.touched[S.day] = true;
+      render();
+      return;
+    }
+
+    const chk = ev.target.closest("[data-check]");
+    if (chk) {
+      const d = draftFor(S.day);
+      d[chk.dataset.check] = !d[chk.dataset.check];
       S.touched[S.day] = true;
       render();
       return;
