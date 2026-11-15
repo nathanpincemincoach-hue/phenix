@@ -354,7 +354,7 @@
   function viewGate() {
     return `
       <section class="gate">
-        <img src="icons/icon-192.png" alt="">
+        <img src="icons/icon-192-v2.png" alt="">
         <h1>Ton suivi <em>Phénix</em></h1>
         <p>${S.error ? esc(S.error) : "Ouvre l'appli avec le lien personnel que Nathan t'a envoyé."}</p>
         <div class="card" style="text-align:left">
@@ -374,7 +374,7 @@
     if (S.ob.step === 1) {
       return `
         <section class="gate" style="padding-top:6px">
-          <img src="icons/icon-192.png" alt="" style="width:88px;height:88px">
+          <img src="icons/icon-192-v2.png" alt="" style="width:88px;height:88px">
           <h1>Bienvenue dans <em>Phénix</em></h1>
           <p>Avant de commencer, remplis ton <b>formulaire de départ</b>. Il sert à calculer ton métabolisme de base et à calibrer ton programme dès la semaine 2.</p>
         </section>

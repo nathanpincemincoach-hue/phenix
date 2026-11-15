@@ -1,9 +1,9 @@
 // Service worker : garde l'appli disponible hors connexion.
 // Changer VERSION à chaque mise en ligne pour que les téléphones prennent la nouvelle version.
-const VERSION = "phenix-v4";
+const VERSION = "phenix-v5";
 const SHELL = [
   "./", "index.html", "style.css", "app.js", "config.js", "manifest.webmanifest",
-  "icons/logo-96.png", "icons/icon-192.png", "icons/apple-touch-icon.png",
+  "icons/logo-96.png", "icons/icon-192-v2.png", "icons/apple-touch-icon-v2.png",
   "fonts/bodoni-moda-latin-400-normal.woff2", "fonts/bodoni-moda-latin-400-italic.woff2",
   "fonts/manrope-latin-500-normal.woff2", "fonts/manrope-latin-700-normal.woff2"
 ];
