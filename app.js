@@ -5,10 +5,12 @@
   const API = String(window.PHENIX_API || "").trim();
   const DEMO = !API;
   const ETAPES = ["Observation", "Calibrage", "Maintenance", "Cycle A", "Cycle B", "Pause"];
-  const MATIN = ["poids", "sommeil", "forme", "cc"];
-  const CHECKS = ["pasOk", "palOk"]; // cases d'hier : 1 = fait, 0 = pas fait (seulement si la journée est remplie)
+  const MATIN = ["poids", "pasJour", "sommeil", "forme", "cc"];
+  // case d'hier : 1 = fait, 0 = pas fait (seulement si la journée est remplie).
+  // « Objectif de pas atteint » (pasOk) n'est plus une case : il se calcule à partir des pas d'hier.
+  const CHECKS = ["palOk"];
   const NUM_FIELDS = {
-    poids: [30, 250], palier: [800, 5000], taille: [40, 200],
+    poids: [30, 250], pasJour: [0, 60000], palier: [800, 5000], taille: [40, 200],
     pas: [0, 60000], kcal: [500, 6000], prot: [0, 400]
   };
   const PROFIL_NUM = {
@@ -103,7 +105,8 @@
         forme: [4, 4, 3, 4, 5, 4, 3][i % 7],
         cc: i < 3 ? 1 : [3, 2, 3, 3, 1, 3, 2][i % 7]
       };
-      if (i > 8) { e.pasOk = i % 5 === 0 ? 0 : 1; e.palOk = i % 6 === 0 ? 0 : 1; }
+      e.pasJour = Math.round(6000 + i * 70 + 1400 * Math.sin(i * 2.3));
+      if (i > 8) { e.pasOk = e.pasJour >= 8000 ? 1 : 0; e.palOk = i % 6 === 0 ? 0 : 1; }
       if (paliers[i]) e.palier = paliers[i];
       if (isSunday(d)) {
         Object.assign(e, {
@@ -114,7 +117,7 @@
         });
         if (i > 28) e.prot = 105;
       }
-      if (i === 41) { MATIN.concat(CHECKS).forEach((k) => delete e[k]); }
+      if (i === 41) { MATIN.concat(CHECKS, ["pasOk"]).forEach((k) => delete e[k]); }
       entries[d] = e;
     }
     S.entries = params.has("form") ? {} : entries;
@@ -150,6 +153,11 @@
     try {
       const j = await apiGet({ action: "load", code });
       const cliente = j.cliente || {};
+      // date du formulaire toujours au format AAAA-MM-JJ
+      if (cliente.formDate && !/^\d{4}-\d{2}-\d{2}$/.test(cliente.formDate)) {
+        const d = new Date(cliente.formDate);
+        cliente.formDate = Number.isNaN(d.getTime()) ? "" : ymd(d);
+      }
       const entries = {};
       (j.entries || []).forEach((e) => { entries[e.date] = clean(e); });
       // ce qui n'est pas encore envoyé garde la priorité
@@ -213,7 +221,7 @@
   /* ---------- calculs ---------- */
   const clean = (e) => {
     const out = {};
-    ["poids", "sommeil", "forme", "cc", "pasOk", "palOk", "palier", "taille", "pas", "kcal", "prot"].forEach((k) => {
+    ["poids", "pasJour", "sommeil", "forme", "cc", "pasOk", "palOk", "palier", "taille", "pas", "kcal", "prot"].forEach((k) => {
       const n = toNum(e[k]);
       if (n !== "" && !Number.isNaN(n)) out[k] = n;
     });
@@ -243,6 +251,17 @@
   const objectifPas = () => Number(S.cliente.objectifPas) || Number(S.cliente.maintPas) || 8000;
   // les cases d'hier apparaissent dès qu'un palier existe (fin de la semaine d'observation)
   const hasPalierBefore = (day) => !!lastBefore("palier", day);
+  // Moyenne des pas sur les 7 saisies du matin qui finissent à `jour` (chaque saisie = les pas de la veille).
+  // `ceJour` remplace la valeur enregistrée du jour (brouillon en cours).
+  function pasMoyen(jour, ceJour) {
+    const v = [];
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(jour, -i);
+      const p = i === 0 && ceJour !== undefined ? ceJour : (S.entries[d] || {}).pasJour;
+      if (typeof p === "number") v.push(p);
+    }
+    return v.length ? { moy: Math.round(v.reduce((s, x) => s + x, 0) / v.length), n: v.length } : null;
+  }
 
   // Calculateur de dépense calorique : Mifflin-St Jeor × niveau d'activité selon les pas
   function calcDepense(t) {
@@ -281,9 +300,9 @@
   }
   function normalized(d, day) {
     const e = {};
-    const keys = ["poids", "sommeil", "forme", "cc"];
+    const keys = ["poids", "pasJour", "sommeil", "forme", "cc"];
     if (d.changePalier) keys.push("palier");
-    if (isSunday(day)) keys.push("taille", "pas", "kcal", "prot");
+    if (isSunday(day)) keys.push("taille", "kcal", "prot");
     for (const k of keys) {
       const n = toNum(d[k]);
       if (Number.isNaN(n)) return { error: k };
@@ -292,8 +311,15 @@
       e[k] = n;
     }
     if (isSunday(day) && d.etape) e.etape = d.etape;
-    // une case non cochée vaut « non » seulement si la journée est remplie ; sinon elle reste vide
+    // le dimanche, la moyenne de pas de la semaine se calcule toute seule
+    if (isSunday(day)) {
+      const m = pasMoyen(day, e.pasJour === undefined ? null : e.pasJour);
+      if (m) e.pas = m.moy;
+    }
     if (hasPalierBefore(day)) {
+      // objectif de pas atteint : calculé à partir des pas d'hier
+      if (e.pasJour !== undefined) e.pasOk = e.pasJour >= objectifPas() ? 1 : 0;
+      // une case non cochée vaut « non » seulement si la journée est remplie ; sinon elle reste vide
       const rempli = MATIN.some((k) => e[k] !== undefined) || CHECKS.some((k) => d[k]);
       CHECKS.forEach((k) => { if (d[k]) e[k] = 1; else if (rempli) e[k] = 0; });
     }
@@ -425,23 +451,42 @@
       </section>`;
   }
 
+  // valeurs proposées dans la carte « fin de semaine 1 » : la moyenne de pas est calculée
+  // à partir des pas notés chaque matin pendant la semaine d'observation
+  function s1Defauts() {
+    const f = S.cliente.formDate;
+    const pm = f ? pasMoyen(addDays(f, 7)) : null;
+    return {
+      moyPasS1: has(S.cliente.moyPasS1) ? inputVal(S.cliente.moyPasS1) : pm ? String(pm.moy) : "",
+      moyKcalS1: inputVal(S.cliente.moyKcalS1)
+    };
+  }
+
+  function pasMoyenTexte(day, d) {
+    const v = toNum(d.pasJour);
+    const m = pasMoyen(day, v === "" || Number.isNaN(v) ? null : v);
+    return m ? `<b style="font-size:20px">${fr(m.moy, 0)} pas</b> par jour · sur ${m.n} jour${m.n > 1 ? "s" : ""} noté${m.n > 1 ? "s" : ""}`
+      : "Note tes pas chaque matin : la moyenne se calculera toute seule.";
+  }
+
   function cardSemaine1() {
     const f = S.cliente.formDate;
     if (!f) return "";
     const j = diffDays(today(), f);
     if (j < 7) {
       return `<div class="note" style="margin-bottom:14px"><b>Semaine d'observation · jour ${j + 1}/7.</b>
-        Tu ne changes rien : photographie tout ce que tu manges dans SnapCalorie, tes pas s'enregistrent tout seuls, et note ton poids ici chaque matin.</div>`;
+        Tu ne changes rien : photographie tout ce que tu manges dans SnapCalorie, et note ici chaque matin ton poids et tes pas d'hier.</div>`;
     }
     if (has(S.cliente.moyPasS1) && has(S.cliente.moyKcalS1)) return "";
-    const s1 = S.drafts.__s1 || (S.drafts.__s1 = { moyPasS1: inputVal(S.cliente.moyPasS1), moyKcalS1: inputVal(S.cliente.moyKcalS1) });
+    const pmS1 = pasMoyen(addDays(f, 7));
+    const s1 = Object.assign(s1Defauts(), S.drafts.__s1 || {});
     return `
       <section class="card week">
         <div class="eyebrow">Formulaire de départ · fin de semaine 1</div>
         <h2>Tes moyennes de la semaine d'observation</h2>
         <div class="field">
           <div class="label">Moyenne de pas par jour</div>
-          <div class="hint">Appli Santé → Activité → Pas, sur les 7 jours d'observation.</div>
+          <div class="hint">${pmS1 ? `Calculée à partir de tes pas notés (${pmS1.n} jour${pmS1.n > 1 ? "s" : ""}). Corrige-la si besoin.` : "Appli Santé → Activité → Pas, sur les 7 jours d'observation."}</div>
           ${numInput("s1", "moyPasS1", s1.moyPasS1, "pas", "Ex : 6 240", "numeric")}
         </div>
         <div class="field">
@@ -480,9 +525,8 @@
           ${numField("taille", d.taille, "cm", lastBefore("taille", day) ? fr(lastBefore("taille", day).value) : "Ex : 94")}
         </div>
         <div class="field">
-          <div class="label">Pas · moyenne de la semaine</div>
-          <div class="hint">Appli Santé → Pas → vue Semaine</div>
-          ${numField("pas", d.pas, "pas", "Ex : 8 200", "numeric")}
+          <div class="label">Pas · moyenne de la semaine <small>calculée toute seule</small></div>
+          <div class="hint" id="pas-moy" style="margin-bottom:0">${pasMoyenTexte(day, d)}</div>
         </div>
         <div class="field">
           <div class="label">Calories · moyenne de la semaine</div>
@@ -521,6 +565,12 @@
         </div>
 
         <div class="field">
+          <div class="label">Pas d'hier <small>appli Santé</small></div>
+          ${numField("pasJour", d.pasJour, "pas", lastBefore("pasJour", day) ? fr(lastBefore("pasJour", day).value, 0).replace(/\s/g, " ") : "Ex : 8 200", "numeric")}
+          ${hasPalierBefore(day) ? `<div class="hint" style="margin:6px 0 0">Objectif : <b>${fr(objectifPas(), 0)} pas minimum</b></div>` : ""}
+        </div>
+
+        <div class="field">
           <div class="label">Sommeil de la nuit</div>
           ${chips("sommeil", [1, 2, 3, 4, 5], d.sommeil)}
           <div class="scale"><span>1 · très mauvaise</span><span>5 · excellente</span></div>
@@ -541,7 +591,6 @@
         ${hasPalierBefore(day) ? `
         <div class="field">
           <div class="label">Hier…</div>
-          ${checkRow("pasOk", d.pasOk, "J'ai atteint mon objectif de pas", `${fr(objectifPas(), 0)} pas minimum`)}
           ${checkRow("palOk", d.palOk, "J'ai respecté mon palier calorique", `${fr(pal.value, 0)} kcal · ni beaucoup moins, ni beaucoup plus`)}
         </div>` : ""}
 
@@ -586,11 +635,59 @@
       </svg>`;
   }
 
+  // Graphique des pas : 28 derniers jours (chaque saisie du matin = les pas de la veille)
+  function pasCard() {
+    const t = today(), obj = objectifPas(), jours = 28;
+    const pts = [];
+    for (let i = jours; i >= 1; i--) {
+      const jourPas = addDays(t, -i);
+      const e = S.entries[addDays(jourPas, 1)];
+      pts.push({ d: jourPas, v: e && typeof e.pasJour === "number" ? e.pasJour : null });
+    }
+    const vals = pts.filter((p) => p.v !== null);
+    if (!vals.length) return `<section class="card"><h2>Mes pas</h2><p class="lead">Ton graphique apparaîtra dès que tu noteras tes pas d'hier chaque matin.</p></section>`;
+    const W = 340, H = 190, P = { l: 38, r: 8, t: 12, b: 24 };
+    const max = Math.max(obj * 1.15, ...vals.map((p) => p.v));
+    const top = Math.ceil(max / 2000) * 2000;
+    const bw = (W - P.l - P.r) / jours;
+    const y = (v) => P.t + (1 - v / top) * (H - P.t - P.b);
+    // moyenne glissante sur 7 jours, seulement là où il y a des données
+    const moy7 = pts.map((p, i) => {
+      const w = pts.slice(Math.max(0, i - 6), i + 1).filter((q) => q.v !== null);
+      return p.v === null || !w.length ? null : w.reduce((s, q) => s + q.v, 0) / w.length;
+    });
+    let path = "";
+    moy7.forEach((m, i) => { if (m !== null) path += `${path && moy7[i - 1] !== null ? "L" : "M"}${(P.l + bw * i + bw / 2).toFixed(1)},${y(m).toFixed(1)}`; });
+    const atteints = vals.filter((p) => p.v >= obj).length;
+    const m7 = pasMoyen(t);
+    const ticks = [0, top / 2, top];
+    return `
+      <section class="card chart">
+        <h2>Mes pas</h2>
+        <p class="lead">${m7 ? `Moyenne des 7 derniers jours : <b>${fr(m7.moy, 0)} pas</b>. ` : ""}Objectif atteint ${atteints} jour${atteints > 1 ? "s" : ""} sur ${vals.length}.</p>
+        <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Graphique des pas">
+          ${ticks.map((v) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}" stroke="#EAF2EC"/>
+            <text x="${P.l - 5}" y="${y(v) + 4}" font-size="10" fill="#4A5E51" text-anchor="end">${fr(v / 1000)}k</text>`).join("")}
+          ${pts.map((p, i) => p.v === null ? "" : `<rect x="${(P.l + bw * i + 1.5).toFixed(1)}" y="${y(p.v).toFixed(1)}" width="${(bw - 3).toFixed(1)}" height="${(y(0) - y(p.v)).toFixed(1)}" rx="2.5" fill="${p.v >= obj ? "#82A38B" : "#FF9B85"}"><title>${shortDate(p.d)} : ${fr(p.v, 0)} pas</title></rect>`).join("")}
+          <line x1="${P.l}" x2="${W - P.r}" y1="${y(obj)}" y2="${y(obj)}" stroke="#D8483D" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <path d="${path}" fill="none" stroke="#18301F" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity=".8"/>
+          <text x="${P.l}" y="${H - 6}" font-size="10" fill="#4A5E51">${shortDate(pts[0].d)}</text>
+          <text x="${W - P.r}" y="${H - 6}" font-size="10" fill="#4A5E51" text-anchor="end">hier</text>
+        </svg>
+        <div class="legend">
+          <span><i style="background:#82A38B"></i>Objectif atteint</span>
+          <span><i style="background:#FF9B85"></i>En dessous</span>
+          <span><i style="background:none;border-top:2px dashed #D8483D;height:0"></i>Objectif ${fr(obj, 0)}</span>
+          <span><i style="background:#18301F;opacity:.8"></i>Moyenne 7 j</span>
+        </div>
+      </section>`;
+  }
+
   function viewProgres() {
     const series = weightSeries();
     const motivation = S.cliente.motivation ? `<section class="card"><div class="eyebrow">Ce que je veux vraiment changer</div>
       <p style="margin:6px 0 0;font:400 20px/1.35 var(--serif);font-style:italic">« ${esc(S.cliente.motivation)} »</p></section>` : "";
-    if (!series.length) return `<section class="card empty">Ta courbe apparaîtra après tes premières pesées.<br>Note ton poids chaque matin dans « Ma journée ».</section>${motivation}`;
+    if (!series.length) return `<section class="card empty">Ta courbe apparaîtra après tes premières pesées.<br>Note ton poids chaque matin dans « Ma journée ».</section>${pasCard()}${motivation}`;
     const depart = Number(S.cliente.depart) || series[0].w;
     const last = series[series.length - 1];
     const lossKg = depart - last.avg;
@@ -604,7 +701,9 @@
     const ccs = last7("cc"), som = last7("sommeil"), frm = last7("forme");
     const pasOk = last7("pasOk"), palOk = last7("palOk");
     const moy = (a) => (a.length ? fr(a.reduce((s, v) => s + v, 0) / a.length) : "—");
-    const pas = lastBefore("pas", t, true);
+    const pm = pasMoyen(t);
+    const pasHebdo = lastBefore("pas", t, true);
+    const pas = pm ? { value: pm.moy } : pasHebdo;
     const pal = lastBefore("palier", t, true);
     const tailles = dates().filter((d) => typeof S.entries[d].taille === "number").map((d) => S.entries[d].taille);
     const obj = objectifPas();
@@ -625,6 +724,8 @@
         <div class="legend"><span><i style="background:#EE6055"></i>Moyenne sur 7 jours</span><span><i style="background:#82A38B;opacity:.6"></i>Pesées</span><span><i style="background:none;border-top:2px dashed #82A38B;height:0"></i>Départ</span></div>
       </section>
 
+      ${pasCard()}
+
       <section class="card">
         <h2>Mes 7 derniers jours</h2>
         <div class="tiles" style="margin-top:10px">
@@ -637,7 +738,7 @@
           <div class="tile"><b>${palOk.filter((v) => v === 1).length}<small style="font-size:15px">/${palOk.length}</small></b><span>jours palier respecté</span></div>
         </div>` : ""}
         ${pal ? `<div class="note">Palier actuel : <b>${fr(pal.value, 0)} kcal</b>${has(S.cliente.maintKcal) ? ` · maintenance optimisée : ${fr(S.cliente.maintKcal, 0)} kcal` : ""}</div>` : ""}
-        ${pas ? `<div class="note">Pas (dernière moyenne) : <b>${fr(pas.value, 0)}</b> ${pas.value >= obj ? `✓ objectif de ${fr(obj, 0)} atteint` : `· objectif : ${fr(obj, 0)} minimum`}</div>` : ""}
+        ${pas ? `<div class="note">Pas (moyenne ${pm ? "des 7 derniers jours" : "de la dernière semaine"}) : <b>${fr(pas.value, 0)}</b> ${pas.value >= obj ? `✓ objectif de ${fr(obj, 0)} atteint` : `· objectif : ${fr(obj, 0)} minimum`}</div>` : ""}
       </section>
 
       ${tailles.length ? `<section class="card">
@@ -652,7 +753,8 @@
   /* ---------- Outils (calculateurs, pré-remplis avec tes données) ---------- */
   function toolsDefaults() {
     const c = S.cliente;
-    const pas = lastBefore("pas", today(), true);
+    const pm = pasMoyen(today());
+    const pas = pm ? { value: pm.moy } : lastBefore("pas", today(), true);
     const pal = lastBefore("palier", today(), true);
     return {
       sexe: c.sexe || "femme",
@@ -809,8 +911,8 @@
       <section class="card">
         <h2>Mon rituel</h2>
         <ol class="steps">
-          <li><b>Chaque matin</b>, juste après ta pesée (30 s) : poids, nuit, forme d'hier, cohérences cardiaques d'hier, objectif de pas et palier d'hier. Palier seulement s'il change.</li>
-          <li><b>Le dimanche matin</b>, avant l'atelier (2 min) : tour de taille, moyennes de la semaine et étape.</li>
+          <li><b>Chaque matin</b>, juste après ta pesée (30 s) : poids, pas d'hier, nuit, forme d'hier, cohérences cardiaques d'hier et palier respecté hier. Palier seulement s'il change.</li>
+          <li><b>Le dimanche matin</b>, avant l'atelier (2 min) : tour de taille, moyennes de calories et de protéines, étape. La moyenne de pas se calcule toute seule.</li>
           <li>Rien à noter ? Laisse vide.</li>
         </ol>
       </section>
@@ -929,7 +1031,7 @@
   }
 
   function saveS1() {
-    const res = readNums(S.drafts.__s1 || {}, ["moyPasS1", "moyKcalS1"]);
+    const res = readNums(Object.assign(s1Defauts(), S.drafts.__s1 || {}), ["moyPasS1", "moyKcalS1"]);
     if (res.error || res.out.moyPasS1 === "" || res.out.moyKcalS1 === "") { toast("Remplis tes deux moyennes"); return; }
     delete S.drafts.__s1;
     S.tools = null;
@@ -996,7 +1098,12 @@
 
   document.addEventListener("input", (ev) => {
     const el = ev.target;
-    if (el.dataset.num) { draftFor(S.day)[el.dataset.num] = el.value; S.touched[S.day] = true; refreshSaveButton(); }
+    if (el.dataset.num) {
+      draftFor(S.day)[el.dataset.num] = el.value;
+      S.touched[S.day] = true;
+      refreshSaveButton();
+      if (el.dataset.num === "pasJour" && $("#pas-moy")) $("#pas-moy").innerHTML = pasMoyenTexte(S.day, draftFor(S.day));
+    }
     if (el.dataset.rep) { (S.drafts.__reperes ||= {})[el.dataset.rep] = el.value; S.touched.__reperes = true; }
     if (el.dataset.s1) { (S.drafts.__s1 ||= {})[el.dataset.s1] = el.value; }
     if (el.dataset.ob) { S.ob.d[el.dataset.ob] = el.value; }
