@@ -85,6 +85,8 @@
     day: today(),
     drafts: {},
     touched: {},
+    modif: {},       // journées complètes rouvertes avec « Modifier ma journée »
+    periode: "7",    // Progression : 7, 30 ou tout
     ob: null,        // formulaire de départ en cours
     tools: null,     // valeurs des outils (pré-remplies)
     syncing: false,
@@ -367,7 +369,9 @@
         const on = String(cur) === String(v);
         const alerte = on && opts.alerte && opts.alerte.includes(v);
         const label = opts.labels ? opts.labels[i] : v;
-        return `<button type="button" class="chip${opts.small ? " small" : ""}${on ? " on" : ""}${alerte ? " alerte" : ""}"
+        // note colorée selon sa valeur (corail → vert)
+        const style = on && opts.couleurs ? ` style="background:${opts.couleurs[i]};border-color:${opts.couleurs[i]};color:#fff"` : "";
+        return `<button type="button" class="chip${opts.small ? " small" : ""}${on ? " on" : ""}${alerte ? " alerte" : ""}"${style}
           data-${opts.attr || "set"}="${field}" data-v="${esc(v)}" aria-pressed="${on}">${esc(label)}</button>`;
       }).join("")}
     </div>`;
@@ -506,6 +510,160 @@
       </section>`;
   }
 
+  /* ---------- rappel du matin (notification sur le téléphone) ---------- */
+  const VAPID = String(window.PHENIX_VAPID || "");
+  const pushDispo = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window && !!VAPID;
+  const enApp = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const estIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const CLE_RAPPEL = () => `phenix:rappel:${code}`;
+  const etatRappel = () => Object.assign({ actif: false, heure: "08:00" }, store.get(CLE_RAPPEL()) || {});
+  function octetsDe(b64) {
+    const s = atob((b64 + "===".slice((b64.length + 3) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(s, (c) => c.charCodeAt(0));
+  }
+  async function activerRappel(heure) {
+    if (DEMO) { toast("En mode démo, aucun rappel n'est envoyé"); return; }
+    if (!/^\d{2}:\d{2}$/.test(heure)) { toast("Choisis une heure"); return; }
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { toast("Autorise les notifications pour recevoir ton rappel"); return; }
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: octetsDe(VAPID) });
+      await apiPost({ action: "rappel", code, abonnement: { endpoint: sub.endpoint }, heure, actif: true });
+      store.set(CLE_RAPPEL(), { actif: true, heure });
+      toast(`Rappel activé à ${heure.replace(":", " h ")} ✓`);
+    } catch (err) {
+      toast(navigator.onLine ? "Impossible d'activer le rappel, réessaie" : "Connecte-toi à internet pour activer le rappel");
+    }
+    render();
+  }
+  async function couperRappel() {
+    const r = etatRappel();
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub && !DEMO) await apiPost({ action: "rappel", code, abonnement: { endpoint: sub.endpoint }, heure: r.heure, actif: false });
+      if (sub) await sub.unsubscribe();
+      store.set(CLE_RAPPEL(), { actif: false, heure: r.heure });
+      toast("Rappel coupé");
+    } catch (_) { toast("Impossible de couper le rappel, réessaie"); }
+    render();
+  }
+  function carteRappel() {
+    const r = etatRappel();
+    const heure = S.drafts.__heure || r.heure;
+    let corps;
+    if (!pushDispo()) {
+      corps = estIOS() && !enApp()
+        ? `<div class="note">Sur iPhone, installe d'abord l'appli sur ton écran d'accueil (voir plus bas), puis ouvre-la depuis son icône pour activer ton rappel.</div>`
+        : `<div class="note">Ton téléphone ne permet pas les notifications de cette appli. Mets à jour ton navigateur (Chrome sur Android, Safari sur iPhone).</div>`;
+    } else {
+      corps = `
+        <div class="field">
+          <div class="label">Heure du rappel <small>chaque jour</small></div>
+          <div class="num"><input type="time" data-rappel="heure" value="${esc(heure)}" aria-label="Heure du rappel"></div>
+        </div>
+        ${r.actif ? `<div class="note">🔔 Rappel actif à <b>${esc(r.heure.replace(":", " h "))}</b>. Tu ne le reçois pas si ta journée est déjà notée.</div>` : ""}
+        <button class="save" style="position:static;margin-top:12px" data-act="rappel-activer">${r.actif ? (heure !== r.heure ? "Changer l'heure" : "Rappel activé ✓") : "Activer mon rappel"}</button>
+        ${r.actif ? `<button class="btn2" data-act="rappel-couper">Couper le rappel</button>` : ""}`;
+    }
+    return `
+      <section class="card" id="rappels">
+        <div class="eyebrow">Notifications</div>
+        <h2>Mon rappel du matin</h2>
+        <p class="lead">Une notification à l'heure de ton choix, juste après ta pesée. Seulement si ta journée n'est pas encore notée.</p>
+        ${corps}
+      </section>`;
+  }
+
+  /* ---------- icônes et couleurs ---------- */
+  const ICO = {
+    poids: '<path d="M5 20h14l-1.6-11H6.6z"/><circle cx="12" cy="5.8" r="2.4"/><path d="M12 14.5l2.2-2.7"/>',
+    pas: '<path d="M7 3c1.7 0 2.6 2 2.6 4.4S8.7 12 7 12 4.4 10 4.4 7.4 5.3 3 7 3zM17 8c1.7 0 2.6 2 2.6 4.4S18.7 17 17 17s-2.6-2-2.6-4.6S15.3 8 17 8zM5.5 15.5h3M15.5 20.5h3"/>',
+    sommeil: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+    forme: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5V5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/>',
+    cc: '<path d="M3 9c3 0 3-3 6-3s3 3 6 3 3-3 6-3M3 15c3 0 3-3 6-3s3 3 6 3 3-3 6-3M3 21c3 0 3-3 6-3s3 3 6 3 3-3 6-3"/>',
+    palOk: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/>',
+    palier: '<path d="M4 20h4v-5h4v-5h4V5h4"/>',
+    phase: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
+    taille: '<rect x="3" y="8" width="18" height="8" rx="2"/><path d="M7 8v3M11 8v4M15 8v3M19 8v2"/>',
+    kcal: '<path d="M12 21c-4 0-7-3-7-7 0-3 2-5 3-7 1 2 2 3 3.5 3C12 7 12 4 14 3c1 3 5 5 5 11 0 4-3 7-7 7z"/>',
+    prot: '<ellipse cx="12" cy="13" rx="6" ry="8"/>'
+  };
+  const ico = (k) => `<span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24">${ICO[k]}</svg></span>`;
+  const lab = (k, texte, petit) => `<div class="label"><span class="lab">${ico(k)}${texte}</span>${petit ? `<small>${petit}</small>` : ""}</div>`;
+  // couleurs des notes : du corail (bas) au vert (haut)
+  const ECHELLE5 = ["#D8483D", "#EE7A5F", "#E2A93B", "#8DB283", "#5E8C6A"];
+  const ECHELLE_CC = ["#D8483D", "#EE7A5F", "#8DB283", "#5E8C6A"];
+
+  /* ---------- bandeau de la semaine ---------- */
+  const etatJour = (d) => {
+    const e = S.entries[d] || {};
+    const n = MATIN.filter((k) => e[k] !== undefined).length;
+    return n === 0 ? "vide" : n === MATIN.length ? "complet" : "partiel";
+  };
+  function bandeauSemaine(day) {
+    const t = today();
+    const jours = [];
+    for (let i = 6; i >= 0; i--) jours.push(addDays(t, -i));
+    return `<div class="semaine">${jours.map((d) => {
+      const et = etatJour(d), p = parse(d);
+      const j = p.toLocaleDateString("fr-FR", { weekday: "short" }).replace(".", "").slice(0, 3);
+      return `<button type="button" class="jour ${et}${d === day ? " sel" : ""}" data-day="${d}" aria-label="${longDate(d)}${et === "complet" ? " · rempli" : ""}">
+        <span class="j">${j}</span><span class="n">${p.getDate()}</span>
+        <span class="pt">${et === "complet" ? '<svg viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9"/></svg>' : ""}</span></button>`;
+    }).join("")}</div>`;
+  }
+
+  /* ---------- point hebdo : résumé des 7 derniers jours ---------- */
+  function resumeSemaine(day) {
+    const sem = [], prec = [];
+    for (let i = 0; i < 7; i++) { sem.push(S.entries[addDays(day, -i)] || {}); prec.push(S.entries[addDays(day, -7 - i)] || {}); }
+    const vals = (arr, k) => arr.map((e) => e[k]).filter((v) => typeof v === "number");
+    const moy = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
+    const p1 = moy(vals(sem, "poids")), p0 = moy(vals(prec, "poids"));
+    const cc = vals(sem, "cc"), som = moy(vals(sem, "sommeil")), frm = moy(vals(sem, "forme"));
+    const pal = vals(sem, "palOk"), pm = pasMoyen(day);
+    const tuile = (val, texte) => `<div class="tile"><b>${val}</b><span>${texte}</span></div>`;
+    const dp = p1 !== null && p0 !== null ? p1 - p0 : null;
+    return `<div class="tiles resume">
+      ${tuile(dp === null ? (p1 !== null ? fr(p1) : "—") : `${dp > 0 ? "+" : dp < 0 ? "−" : ""}${fr(Math.abs(dp))}<small> kg</small>`, dp === null ? "poids moyen (kg)" : "poids vs semaine d'avant")}
+      ${tuile(pm ? fr(pm.moy, 0) : "—", "pas par jour")}
+      ${tuile(cc.length ? `${cc.reduce((s, v) => s + v, 0)}<small>/${3 * cc.length}</small>` : "—", "cohérences cardiaques")}
+      ${tuile(som === null ? "—" : fr(som), "sommeil moyen /5")}
+      ${tuile(frm === null ? "—" : fr(frm), "forme moyenne /5")}
+      ${tuile(pal.length ? `${pal.filter((v) => v === 1).length}<small>/${pal.length}</small>` : "—", "jours palier respecté")}
+    </div>`;
+  }
+
+  /* ---------- écran « Bravo » quand la journée est complète ---------- */
+  function cartesBravo(day, d) {
+    const e = S.entries[day] || {};
+    const t = today();
+    const ligne = (k, texte) => `<li>${ico(k)}<span>${texte}</span></li>`;
+    const phase = phaseAvant(addDays(day, 1));
+    return `
+      <section class="card bravo">
+        <div class="bravo-tete">
+          <div class="bravo-rond"><svg viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9"/></svg></div>
+          <div>
+            <h2>${day === t ? "Bravo, tout est fait pour aujourd'hui" : "Journée complète"}</h2>
+            <p class="lead" style="margin:0">${day === t ? "Rendez-vous demain matin, juste après ta pesée." : longDate(day)}</p>
+          </div>
+        </div>
+        <ul class="bravo-liste">
+          ${ligne("poids", `<b>${fr(e.poids)} kg</b>`)}
+          ${ligne("pas", `<b>${fr(e.pasJour, 0)} pas</b> hier${typeof e.pasOk === "number" ? (e.pasOk ? " · objectif atteint ✓" : " · objectif pas atteint") : ""}`)}
+          ${ligne("sommeil", `Sommeil <b>${e.sommeil}/5</b>`)}
+          ${ligne("forme", `Forme d'hier <b>${e.forme}/5</b>`)}
+          ${ligne("cc", `<b>${e.cc}/3</b> cohérence${e.cc > 1 ? "s" : ""} cardiaque${e.cc > 1 ? "s" : ""}`)}
+          ${typeof e.palOk === "number" ? ligne("palOk", e.palOk ? "Palier respecté ✓" : "Palier pas respecté hier") : ""}
+          ${phase ? ligne("phase", `Phase : <b>${esc(phase)}</b>`) : ""}
+        </ul>
+        <button class="btn2" data-act="modifier">Modifier ma journée</button>
+      </section>`;
+  }
+
   function viewJour() {
     const day = S.day;
     const d = draftFor(day);
@@ -517,6 +675,7 @@
     const palDays = pal ? diffDays(day, pal.date) : null;
     const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
     const showInstall = !LECTURE && !standalone && !store.get("phenix:install-dismissed") && off === 0;
+    const bravo = etatJour(day) === "complet" && !S.modif[day] && !S.touched[day];
 
     let palNote = "";
     if (d.changePalier && pal && palDays < 3) {
@@ -527,26 +686,28 @@
     const week = isSunday(day) ? `
       <section class="card week">
         <div class="eyebrow">Dimanche · avant l'atelier</div>
-        <h2>Bilan de la semaine</h2>
+        <h2>Point hebdo</h2>
+        <p class="lead">Ta semaine en un coup d'œil, puis 3 mesures à noter.</p>
+        ${resumeSemaine(day)}
         <div class="field">
-          <div class="label">Tour de taille <small>au nombril, à jeun</small></div>
+          ${lab("taille", "Tour de taille", "au nombril, à jeun")}
           ${numField("taille", d.taille, "cm", lastBefore("taille", day) ? fr(lastBefore("taille", day).value) : "Ex : 94")}
         </div>
         <div class="field">
-          <div class="label">Pas · moyenne de la semaine <small>calculée toute seule</small></div>
-          <div class="hint" id="pas-moy" style="margin-bottom:0">${pasMoyenTexte(day, d)}</div>
-        </div>
-        <div class="field">
-          <div class="label">Calories · moyenne de la semaine</div>
+          ${lab("kcal", "Calories · moyenne de la semaine")}
           <div class="hint">SnapCalorie → Charts → ligne « Daily Average »</div>
           ${numField("kcal", d.kcal, "kcal", "Ex : 1 750", "numeric")}
         </div>
         <div class="field">
-          <div class="label">Protéines · moyenne de la semaine <small>dès le module macros</small></div>
+          ${lab("prot", "Protéines · moyenne de la semaine", "dès le module macros")}
           ${numField("prot", d.prot, "g", has(S.cliente.cibleProt) ? `Cible : ${fr(S.cliente.cibleProt, 0)} g` : "Ex : 110", "numeric")}
         </div>
-      </section>` : `
-      <div class="note" style="margin-bottom:14px">Le <b>bilan de la semaine</b> (tour de taille, moyennes de calories et de protéines) se remplit le dimanche matin, avant l'atelier.</div>`;
+        <div class="field">
+          ${lab("pas", "Pas · moyenne de la semaine", "calculée toute seule")}
+          <div class="hint" id="pas-moy" style="margin-bottom:0">${pasMoyenTexte(day, d)}</div>
+        </div>
+      </section>` : (bravo ? "" : `
+      <div class="note" style="margin-bottom:14px">Le <b>point hebdo</b> (tour de taille, moyennes de calories et de protéines) se remplit le dimanche matin, avant l'atelier.</div>`);
 
     // Ma phase : affichée chaque jour, modifiable à tout moment
     const avant = phaseAvant(day);
@@ -555,9 +716,9 @@
         <div class="field">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:6px">
             <div>
-              <div class="label" style="justify-content:flex-start;align-items:center">Ma phase
+              <div class="label" style="justify-content:flex-start;align-items:center"><span class="lab">${ico("phase")}Ma phase</span>
                 <button type="button" class="info-btn" data-act="info-phase" aria-expanded="${!!S.infoPhase}" aria-label="À quoi correspond chaque phase ?">i</button></div>
-              <div class="hint" style="margin:0">${phase ? `<b>${esc(phase)}</b>${d.etape && d.etape !== avant ? " · change aujourd'hui" : ""}` : "Pas encore choisie"}</div>
+              <div class="hint" style="margin:0 0 0 40px">${phase ? `<b>${esc(phase)}</b>${d.etape && d.etape !== avant ? " · change aujourd'hui" : ""}` : "Pas encore choisie"}</div>
             </div>
             <button type="button" class="btn2" style="width:auto;height:40px;margin:0;padding:0 16px" data-act="toggle-phase">${d.ouvrirPhase ? "Fermer" : "Changer"}</button>
           </div>
@@ -568,61 +729,51 @@
             <div class="hint" style="margin-top:8px">Choisis ta nouvelle phase le jour où tu en changes, puis enregistre.</div>` : ""}
         </div>`;
 
-    return `
-      ${showInstall ? `<div class="note" style="margin:0 0 14px;display:flex;gap:10px;align-items:center;justify-content:space-between">
-        <span>📲 Installe l'appli sur ton écran d'accueil.</span>
-        <button class="btn2" style="width:auto;height:40px;margin:0;padding:0 14px;white-space:nowrap" data-act="go-install">Comment ?</button></div>` : ""}
-      ${off === 0 ? cardSemaine1() : ""}
-      <div class="daybar">
-        <button data-act="prev" aria-label="Jour précédent" ${off >= JOURS_ARRIERE ? "disabled" : ""}>‹</button>
-        <div class="daylabel"><b>${title}</b><span>${longDate(day)}</span></div>
-        <button data-act="next" aria-label="Jour suivant" ${off <= 0 ? "disabled" : ""}>›</button>
-      </div>
-
+    const formulaire = `
       <section class="card">
         <div class="eyebrow">Le matin, juste après la pesée</div>
         <h2>Ma journée</h2>
 
         <div class="field">
-          <div class="label">Poids <small>à jeun, après les toilettes</small></div>
+          ${lab("poids", "Poids", "à jeun, après les toilettes")}
           ${numField("poids", d.poids, "kg", lastW ? fr(lastW.value) : "Ex : 72,4")}
         </div>
 
         <div class="field">
-          <div class="label">Pas d'hier <small>appli Santé</small></div>
+          ${lab("pas", "Pas d'hier", "appli Santé")}
           ${numField("pasJour", d.pasJour, "pas", lastBefore("pasJour", day) ? fr(lastBefore("pasJour", day).value, 0).replace(/\s/g, " ") : "Ex : 8 200", "numeric")}
           ${hasPalierBefore(day) ? `<div class="hint" style="margin:6px 0 0">Objectif : <b>${fr(objectifPas(), 0)} pas minimum</b></div>` : ""}
         </div>
 
         <div class="field">
-          <div class="label">Sommeil de la nuit</div>
-          ${chips("sommeil", [1, 2, 3, 4, 5], d.sommeil)}
+          ${lab("sommeil", "Sommeil de la nuit")}
+          ${chips("sommeil", [1, 2, 3, 4, 5], d.sommeil, { couleurs: ECHELLE5 })}
           <div class="scale"><span>1 · très mauvaise</span><span>5 · excellente</span></div>
         </div>
 
         <div class="field">
-          <div class="label">Ma forme d'hier</div>
-          ${chips("forme", [1, 2, 3, 4, 5], d.forme, { alerte: [1, 2] })}
+          ${lab("forme", "Ma forme d'hier")}
+          ${chips("forme", [1, 2, 3, 4, 5], d.forme, { couleurs: ECHELLE5 })}
           <div class="scale"><span>1 · épuisée</span><span>5 · pleine forme</span></div>
           <div class="hint" style="margin-top:8px">1 ou 2 = au moins un signe de fatigue : pensées obsédantes sur la nourriture, fatigue malgré une bonne nuit, irritabilité, baisse de forme.</div>
         </div>
 
         <div class="field">
-          <div class="label">Cohérence cardiaque d'hier <small>séances de 5 min</small></div>
-          ${chips("cc", [0, 1, 2, 3], d.cc)}
+          ${lab("cc", "Cohérence cardiaque d'hier", "séances de 5 min")}
+          ${chips("cc", [0, 1, 2, 3], d.cc, { couleurs: ECHELLE_CC })}
         </div>
 
         ${hasPalierBefore(day) ? `
         <div class="field">
-          <div class="label">Hier…</div>
+          ${lab("palOk", "Hier…")}
           ${checkRow("palOk", d.palOk, "J'ai respecté mon palier calorique", `${fr(pal.value, 0)} kcal · ni beaucoup moins, ni beaucoup plus`)}
         </div>` : ""}
 
         <div class="field">
           <div class="switch">
             <div>
-              <div class="label">J'ai changé de palier aujourd'hui</div>
-              <div class="hint" style="margin:0">${pal ? `Palier actuel : <b>${fr(pal.value, 0)} kcal</b> depuis ${palDays === 0 ? "aujourd'hui" : palDays + " j"}` : "Pas encore de palier noté"}</div>
+              ${lab("palier", "J'ai changé de palier aujourd'hui")}
+              <div class="hint" style="margin:0 0 0 40px">${pal ? `Palier actuel : <b>${fr(pal.value, 0)} kcal</b> depuis ${palDays === 0 ? "aujourd'hui" : palDays + " j"}` : "Pas encore de palier noté"}</div>
             </div>
             <button type="button" data-act="toggle-palier" aria-pressed="${!!d.changePalier}" aria-label="Changement de palier"></button>
           </div>
@@ -630,11 +781,29 @@
           ${palNote}
         </div>
         ${phaseField}
-      </section>
+      </section>`;
+
+    return `
+      ${showInstall ? `<div class="note" style="margin:0 0 14px;display:flex;gap:10px;align-items:center;justify-content:space-between">
+        <span>📲 Installe l'appli sur ton écran d'accueil.</span>
+        <button class="btn2" style="width:auto;height:40px;margin:0;padding:0 14px;white-space:nowrap" data-act="go-install">Comment ?</button></div>` : ""}
+      ${off === 0 && !showInstall && !LECTURE && enApp() && pushDispo() && !etatRappel().actif && !store.get("phenix:rappel-vu") ? `
+      <div class="note" style="margin:0 0 14px;display:flex;gap:10px;align-items:center;justify-content:space-between">
+        <span>🔔 Active ton rappel du matin pour ne pas oublier.</span>
+        <button class="btn2" style="width:auto;height:40px;margin:0;padding:0 14px;white-space:nowrap" data-act="go-rappel">Activer</button></div>` : ""}
+      ${off === 0 ? cardSemaine1() : ""}
+      ${bandeauSemaine(day)}
+      <div class="daybar">
+        <button data-act="prev" aria-label="Jour précédent" ${off >= JOURS_ARRIERE ? "disabled" : ""}>‹</button>
+        <div class="daylabel"><b>${title}</b><span>${longDate(day)}</span></div>
+        <button data-act="next" aria-label="Jour suivant" ${off <= 0 ? "disabled" : ""}>›</button>
+      </div>
+
+      ${bravo ? cartesBravo(day, d) : formulaire}
 
       ${week}
 
-      <button class="save" data-act="save" ${isDirty(day) ? "" : "disabled"}>${saveLabel(day)}</button>`;
+      ${bravo && !isSunday(day) ? "" : `<button class="save" data-act="save" ${isDirty(day) ? "" : "disabled"}>${saveLabel(day)}</button>`}`;
   }
 
   function chartSvg(series, depart) {
@@ -660,9 +829,30 @@
       </svg>`;
   }
 
-  // Graphique des pas : 28 derniers jours (chaque saisie du matin = les pas de la veille)
-  function pasCard() {
-    const t = today(), obj = objectifPas(), jours = 28;
+  /* ---------- Progression : périodes 7 j / 30 j / depuis le début ---------- */
+  const PERIODES = [["7", "7 jours"], ["30", "30 jours"], ["tout", "Depuis le début"]];
+  function bornesPeriode() {
+    const t = today();
+    if (S.periode === "tout") {
+      const ds = dates();
+      const de = ds[0] && ds[0] < t ? ds[0] : t;
+      return { de, a: t, n: diffDays(t, de) + 1, lib: "depuis le début" };
+    }
+    const n = Number(S.periode);
+    return { de: addDays(t, -(n - 1)), a: t, n, lib: `sur ${n} jours` };
+  }
+  const dansPeriode = (b) => dates().filter((d) => d >= b.de && d <= b.a).map((d) => S.entries[d]);
+  // nombre de jours consécutifs (en finissant aujourd'hui, ou hier si aujourd'hui n'est pas encore rempli) où `ok(entrée)` est vrai
+  function serie(ok) {
+    let d = today(), n = 0;
+    if (!ok(S.entries[d] || {})) d = addDays(d, -1);
+    while (ok(S.entries[d] || {})) { n++; d = addDays(d, -1); }
+    return n;
+  }
+
+  // Graphique des pas (chaque saisie du matin = les pas de la veille)
+  function pasCard(b) {
+    const t = today(), obj = objectifPas(), jours = Math.max(b.n, 7);
     const pts = [];
     for (let i = jours; i >= 1; i--) {
       const jourPas = addDays(t, -i);
@@ -672,11 +862,9 @@
     const vals = pts.filter((p) => p.v !== null);
     if (!vals.length) return `<section class="card"><h2>Mes pas</h2><p class="lead">Ton graphique apparaîtra dès que tu noteras tes pas d'hier chaque matin.</p></section>`;
     const W = 340, H = 190, P = { l: 38, r: 8, t: 12, b: 24 };
-    const max = Math.max(obj * 1.15, ...vals.map((p) => p.v));
-    const top = Math.ceil(max / 2000) * 2000;
+    const top = Math.ceil(Math.max(obj * 1.15, ...vals.map((p) => p.v)) / 2000) * 2000;
     const bw = (W - P.l - P.r) / jours;
     const y = (v) => P.t + (1 - v / top) * (H - P.t - P.b);
-    // moyenne glissante sur 7 jours, seulement là où il y a des données
     const moy7 = pts.map((p, i) => {
       const w = pts.slice(Math.max(0, i - 6), i + 1).filter((q) => q.v !== null);
       return p.v === null || !w.length ? null : w.reduce((s, q) => s + q.v, 0) / w.length;
@@ -684,16 +872,16 @@
     let path = "";
     moy7.forEach((m, i) => { if (m !== null) path += `${path && moy7[i - 1] !== null ? "L" : "M"}${(P.l + bw * i + bw / 2).toFixed(1)},${y(m).toFixed(1)}`; });
     const atteints = vals.filter((p) => p.v >= obj).length;
-    const m7 = pasMoyen(t);
-    const ticks = [0, top / 2, top];
+    const moyP = Math.round(vals.reduce((s, p) => s + p.v, 0) / vals.length);
+    const gap = bw > 6 ? 1.5 : 0.4;
     return `
       <section class="card chart">
         <h2>Mes pas</h2>
-        <p class="lead">${m7 ? `Moyenne des 7 derniers jours : <b>${fr(m7.moy, 0)} pas</b>. ` : ""}Objectif atteint ${atteints} jour${atteints > 1 ? "s" : ""} sur ${vals.length}.</p>
+        <p class="lead">Moyenne ${b.lib} : <b>${fr(moyP, 0)} pas</b>. Objectif atteint ${atteints} jour${atteints > 1 ? "s" : ""} sur ${vals.length}.</p>
         <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Graphique des pas">
-          ${ticks.map((v) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}" stroke="#EAF2EC"/>
+          ${[0, top / 2, top].map((v) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}" stroke="#EAF2EC"/>
             <text x="${P.l - 5}" y="${y(v) + 4}" font-size="10" fill="#4A5E51" text-anchor="end">${fr(v / 1000)}k</text>`).join("")}
-          ${pts.map((p, i) => p.v === null ? "" : `<rect x="${(P.l + bw * i + 1.5).toFixed(1)}" y="${y(p.v).toFixed(1)}" width="${(bw - 3).toFixed(1)}" height="${(y(0) - y(p.v)).toFixed(1)}" rx="2.5" fill="${p.v >= obj ? "#82A38B" : "#FF9B85"}"><title>${shortDate(p.d)} : ${fr(p.v, 0)} pas</title></rect>`).join("")}
+          ${pts.map((p, i) => p.v === null ? "" : `<rect x="${(P.l + bw * i + gap).toFixed(1)}" y="${y(p.v).toFixed(1)}" width="${Math.max(0.8, bw - 2 * gap).toFixed(1)}" height="${(y(0) - y(p.v)).toFixed(1)}" rx="${bw > 6 ? 2.5 : 0.5}" fill="${p.v >= obj ? "#82A38B" : "#FF9B85"}"><title>${shortDate(p.d)} : ${fr(p.v, 0)} pas</title></rect>`).join("")}
           <line x1="${P.l}" x2="${W - P.r}" y1="${y(obj)}" y2="${y(obj)}" stroke="#D8483D" stroke-width="1.5" stroke-dasharray="5 4"/>
           <path d="${path}" fill="none" stroke="#18301F" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity=".8"/>
           <text x="${P.l}" y="${H - 6}" font-size="10" fill="#4A5E51">${shortDate(pts[0].d)}</text>
@@ -708,11 +896,90 @@
       </section>`;
   }
 
+  // Calendrier coloré de la cohérence cardiaque (une colonne par semaine, du lundi au dimanche)
+  function calendrierCC(b) {
+    const t = today();
+    const lundi = (s) => addDays(s, -((parse(s).getDay() + 6) % 7));
+    const debut = lundi(b.n < 28 ? addDays(t, -27) : b.de);
+    const semaines = Math.ceil((diffDays(t, debut) + 1) / 7);
+    const COUL = ["#F6D3CB", "#D7E6D8", "#A9C7AE", "#6F9A78"];
+    let cols = "";
+    for (let w = 0; w < semaines; w++) {
+      let cases = "";
+      for (let j = 0; j < 7; j++) {
+        const d = addDays(debut, w * 7 + j);
+        const e = S.entries[d] || {};
+        const futur = d > t;
+        const c = futur ? "transparent" : typeof e.cc === "number" ? COUL[e.cc] : "#EEF1EC";
+        cases += `<i style="background:${c}" title="${shortDate(d)}${typeof e.cc === "number" ? ` : ${e.cc}/3` : ""}"></i>`;
+      }
+      cols += `<div class="col">${cases}</div>`;
+    }
+    return `
+      <section class="card">
+        <h2>Ma cohérence cardiaque</h2>
+        <p class="lead">Chaque case est un jour : plus elle est verte, plus tu as fait de séances.</p>
+        <div class="heat"><div class="jours-l"><span>L</span><span></span><span>M</span><span></span><span>V</span><span></span><span>D</span></div><div class="grille">${cols}</div></div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;font-size:12.5px;color:var(--foret-douce);margin-top:8px">Moins
+          ${COUL.map((c) => `<i style="display:inline-block;background:${c};width:13px;height:13px;border-radius:3px"></i>`).join("")} Plus</div>
+      </section>`;
+  }
+
   function viewProgres() {
+    const b = bornesPeriode();
     const series = weightSeries();
+    const onglets = `<div class="periodes">${PERIODES.map(([v, l]) => `<button type="button" data-periode="${v}" class="${S.periode === v ? "on" : ""}">${l}</button>`).join("")}</div>`;
     const motivation = S.cliente.motivation ? `<section class="card"><div class="eyebrow">Ce que je veux vraiment changer</div>
       <p style="margin:6px 0 0;font:400 20px/1.35 var(--serif);font-style:italic">« ${esc(S.cliente.motivation)} »</p></section>` : "";
-    if (!series.length) return `<section class="card empty">Ta courbe apparaîtra après tes premières pesées.<br>Note ton poids chaque matin dans « Ma journée ».</section>${pasCard()}${motivation}`;
+    const obj = objectifPas();
+
+    // séries en cours
+    const sSaisie = serie((e) => MATIN.some((k) => e[k] !== undefined));
+    const sCC = serie((e) => e.cc === 3);
+    const sPas = serie((e) => e.pasOk === 1 || (typeof e.pasJour === "number" && e.pasJour >= obj));
+    const series3 = `
+      <section class="card">
+        <h2>Mes séries</h2>
+        <div class="tiles" style="margin-top:10px">
+          <div class="tile"><b>${sSaisie}<small> j</small></b><span>de suivi d'affilée</span></div>
+          <div class="tile"><b>${sCC}<small> j</small></b><span>cohérence 3/3</span></div>
+          <div class="tile"><b>${sPas}<small> j</small></b><span>objectif de pas</span></div>
+        </div>
+      </section>`;
+
+    // moyennes de la période
+    const E = dansPeriode(b);
+    const v = (k) => E.map((e) => e[k]).filter((x) => typeof x === "number");
+    const moy = (a) => (a.length ? fr(a.reduce((s, x) => s + x, 0) / a.length) : "—");
+    const cc = v("cc"), pasOk = v("pasOk"), palOk = v("palOk");
+    const pal = lastBefore("palier", b.a, true);
+    const periode = `
+      <section class="card">
+        <h2>Mes habitudes · ${b.lib}</h2>
+        <div class="tiles" style="margin-top:10px">
+          <div class="tile"><b>${cc.length ? `${cc.reduce((s, x) => s + x, 0)}<small style="font-size:15px">/${3 * cc.length}</small>` : "—"}</b><span>cohérences cardiaques</span></div>
+          <div class="tile"><b>${moy(v("sommeil"))}</b><span>sommeil moyen /5</span></div>
+          <div class="tile"><b>${moy(v("forme"))}</b><span>forme moyenne /5</span></div>
+        </div>
+        ${pasOk.length || palOk.length ? `<div class="tiles" style="margin-top:8px;grid-template-columns:1fr 1fr">
+          <div class="tile"><b>${pasOk.filter((x) => x === 1).length}<small style="font-size:15px">/${pasOk.length}</small></b><span>jours objectif de pas atteint</span></div>
+          <div class="tile"><b>${palOk.filter((x) => x === 1).length}<small style="font-size:15px">/${palOk.length}</small></b><span>jours palier respecté</span></div>
+        </div>` : ""}
+        ${pal ? `<div class="note">Palier actuel : <b>${fr(pal.value, 0)} kcal</b>${has(S.cliente.maintKcal) ? ` · maintenance optimisée : ${fr(S.cliente.maintKcal, 0)} kcal` : ""}</div>` : ""}
+      </section>`;
+
+    const tailles = dates().filter((d) => typeof S.entries[d].taille === "number").map((d) => S.entries[d].taille);
+    const taille = tailles.length ? `<section class="card">
+        <h2>Tour de taille</h2>
+        <p class="lead" style="margin-top:6px">${tailles.length > 1
+          ? `${fr(tailles[0])} cm → <b>${fr(tailles[tailles.length - 1])} cm</b> (${tailles[tailles.length - 1] <= tailles[0] ? "−" : "+"}${fr(Math.abs(tailles[tailles.length - 1] - tailles[0]))} cm)`
+          : `Première mesure : <b>${fr(tailles[0])} cm</b>`}</p>
+      </section>` : "";
+
+    if (!series.length) {
+      return `${onglets}<section class="card empty">Ta courbe de poids apparaîtra après tes premières pesées.<br>Note ton poids chaque matin dans « Ma journée ».</section>
+        ${series3}${pasCard(b)}${periode}${calendrierCC(b)}${motivation}`;
+    }
     const depart = Number(S.cliente.depart) || series[0].w;
     const last = series[series.length - 1];
     const lossKg = depart - last.avg;
@@ -720,59 +987,112 @@
     const goal = depart * 0.9;
     const fill = Math.max(0, Math.min(100, (pct / 10) * 100));
     const big = lossKg >= 0.05 ? `−${fr(lossKg)} <em>kg</em>` : lossKg <= -0.05 ? `+${fr(-lossKg)} <em>kg</em>` : `0 <em>kg</em>`;
-
-    const t = today();
-    const last7 = (k) => { const v = []; for (let i = 0; i < 7; i++) { const e = S.entries[addDays(t, -i)]; if (e && typeof e[k] === "number") v.push(e[k]); } return v; };
-    const ccs = last7("cc"), som = last7("sommeil"), frm = last7("forme");
-    const pasOk = last7("pasOk"), palOk = last7("palOk");
-    const moy = (a) => (a.length ? fr(a.reduce((s, v) => s + v, 0) / a.length) : "—");
-    const pm = pasMoyen(t);
-    const pasHebdo = lastBefore("pas", t, true);
-    const pas = pm ? { value: pm.moy } : pasHebdo;
-    const pal = lastBefore("palier", t, true);
-    const tailles = dates().filter((d) => typeof S.entries[d].taille === "number").map((d) => S.entries[d].taille);
-    const obj = objectifPas();
+    // variation sur la période (moyenne glissante au début et à la fin)
+    const avant = series.filter((p) => p.d < b.de);
+    const ref = S.periode === "tout" ? depart : (avant.length ? avant[avant.length - 1].avg : null);
+    const varP = ref !== null ? last.avg - ref : null;
+    const visibles = series.filter((p) => p.d >= b.de);
+    const serieGraph = visibles.length >= 2 ? visibles : series.slice(-2);
 
     return `
+      ${onglets}
       <section class="card hero">
         <div class="eyebrow">Depuis ton départ</div>
         <div class="big">${big}</div>
         <div class="sub">${pct >= 0 ? "−" : "+"}${fr(Math.abs(pct))} % · moyenne de tes 7 dernières pesées</div>
         <div class="bar" aria-hidden="true"><i style="width:${fill}%"></i></div>
         <div class="bar-legend"><span>Départ ${fr(depart)} kg</span><span>Objectif −10 % : ${fr(goal)} kg</span></div>
+        ${varP !== null && S.periode !== "tout" ? `<div class="note" style="margin-top:12px">${b.lib.charAt(0).toUpperCase() + b.lib.slice(1)} : <b>${varP > 0 ? "+" : varP < 0 ? "−" : ""}${fr(Math.abs(varP))} kg</b></div>` : ""}
       </section>
 
       <section class="card chart">
         <h2>Mon poids</h2>
         <p class="lead">Les points bougent avec l'eau, c'est normal. La courbe, elle, montre la vraie tendance.</p>
-        ${chartSvg(series, depart)}
-        <div class="legend"><span><i style="background:#EE6055"></i>Moyenne sur 7 jours</span><span><i style="background:#82A38B;opacity:.6"></i>Pesées</span><span><i style="background:none;border-top:2px dashed #82A38B;height:0"></i>Départ</span></div>
+        ${chartSvg(serieGraph, S.periode === "tout" ? depart : null)}
+        <div class="legend"><span><i style="background:#EE6055"></i>Moyenne sur 7 jours</span><span><i style="background:#82A38B;opacity:.6"></i>Pesées</span>${S.periode === "tout" ? '<span><i style="background:none;border-top:2px dashed #82A38B;height:0"></i>Départ</span>' : ""}</div>
       </section>
 
-      ${pasCard()}
-
-      <section class="card">
-        <h2>Mes 7 derniers jours</h2>
-        <div class="tiles" style="margin-top:10px">
-          <div class="tile"><b>${ccs.reduce((s, v) => s + v, 0)}<small style="font-size:15px">/21</small></b><span>cohérences cardiaques</span></div>
-          <div class="tile"><b>${moy(som)}</b><span>sommeil moyen /5</span></div>
-          <div class="tile"><b>${moy(frm)}</b><span>forme moyenne /5</span></div>
-        </div>
-        ${pasOk.length || palOk.length ? `<div class="tiles" style="margin-top:8px;grid-template-columns:1fr 1fr">
-          <div class="tile"><b>${pasOk.filter((v) => v === 1).length}<small style="font-size:15px">/${pasOk.length}</small></b><span>jours objectif de pas atteint</span></div>
-          <div class="tile"><b>${palOk.filter((v) => v === 1).length}<small style="font-size:15px">/${palOk.length}</small></b><span>jours palier respecté</span></div>
-        </div>` : ""}
-        ${pal ? `<div class="note">Palier actuel : <b>${fr(pal.value, 0)} kcal</b>${has(S.cliente.maintKcal) ? ` · maintenance optimisée : ${fr(S.cliente.maintKcal, 0)} kcal` : ""}</div>` : ""}
-        ${pas ? `<div class="note">Pas (moyenne ${pm ? "des 7 derniers jours" : "de la dernière semaine"}) : <b>${fr(pas.value, 0)}</b> ${pas.value >= obj ? `✓ objectif de ${fr(obj, 0)} atteint` : `· objectif : ${fr(obj, 0)} minimum`}</div>` : ""}
-      </section>
-
-      ${tailles.length ? `<section class="card">
-        <h2>Tour de taille</h2>
-        <p class="lead" style="margin-top:6px">${tailles.length > 1
-          ? `${fr(tailles[0])} cm → <b>${fr(tailles[tailles.length - 1])} cm</b> (${tailles[tailles.length - 1] <= tailles[0] ? "−" : "+"}${fr(Math.abs(tailles[tailles.length - 1] - tailles[0]))} cm)`
-          : `Première mesure : <b>${fr(tailles[0])} cm</b>`}</p>
-      </section>` : ""}
+      ${series3}
+      ${pasCard(b)}
+      ${periode}
+      ${calendrierCC(b)}
+      ${taille}
       ${motivation}`;
+  }
+
+  /* ---------- Mon parcours (roadmap Phénix, d'après les modules Skool) ---------- */
+  // [étape, précision, vidéo Skool correspondante]
+  const PARCOURS = [
+    { phase: "Observation", titre: "Semaine 1 · Connaître ton point de départ", etapes: [
+      ["Installer tes outils", "Appli Santé (pas), SnapCalorie, Respirelax+", "Semaine 1 › Installation des outils"],
+      ["Remplir ton formulaire de départ", "Dans l'appli, à la première ouverture", ""],
+      ["Cohérence cardiaque 3 × 5 min par jour", "Au réveil, avant le déjeuner, au coucher", "Semaine 1 › Le stress"],
+      ["7 jours d'observation", "Tu ne changes rien : photos des repas, pas et poids chaque matin", "Semaine 1 › Utilisation Snapcalories"],
+      ["Envoyer tes moyennes", "Pas (calculée par l'appli) + calories (SnapCalorie)", ""]
+    ] },
+    { phase: "Calibrage", titre: "Semaine 2 · Calibrer", etapes: [
+      ["Calculer ton total théorique", "Onglet Outils › Ma dépense calorique", "Semaine 2 › Calculer total théorique"],
+      ["Identifier ton cas (1, 2 ou 3)", "Ton total comparé à ta moyenne de semaine 1", "Semaine 2 › Analyser total théorique"],
+      ["Rejoindre ton total par paliers de 200 kcal", "Règle des 72 h avant chaque changement", "Semaine 2 › Lire fluctuation poids"]
+    ] },
+    { phase: "Maintenance", titre: "Trouver ta maintenance optimisée", etapes: [
+      ["Atteindre 8 000 pas par jour minimum", "+500 à 1 000 pas à la fois, tenus une semaine", "Semaine 2 › Comprendre le métabolisme"],
+      ["Explorer +200 kcal par palier", "Tant que ton poids reste stable", "Semaine 2 › Maintenance optimisée"],
+      ["Noter ta maintenance optimisée", "Onglet Repères (kcal + pas)", ""]
+    ] },
+    { phase: "Cycle A", titre: "Cycle A · Déficit", etapes: [
+      ["−200 kcal quand ton poids stagne 3-4 jours", "Depuis ta maintenance optimisée", "Semaine 2 › Cycle A"],
+      ["Atteindre ta cible de protéines", "Onglet Outils › Mes macros", "Semaine 3 › Les macro-nutriments"],
+      ["T'arrêter aux signes de fatigue", "Stagnation + fatigue = ta limite basse", "Semaine 2 › Cycle A"]
+    ] },
+    { phase: "Cycle B", titre: "Cycle B · Remontée", etapes: [
+      ["+200 kcal par palier", "Jusqu'à ta maintenance optimisée", "Semaine 2 › Cycle B"],
+      ["Augmenter tes pas si tu le souhaites", "C'est le bon moment", "Semaine 2 › Maintenance optimisée"]
+    ] },
+    { phase: "Pause", titre: "Pause · Souffler à ta maintenance", etapes: [
+      ["Rester à ta maintenance optimisée", "Vacances, période chargée : c'est un diet break", "Semaine 3 › Apéros, vacances"],
+      ["Relancer un cycle A quand tu te sens prête", "", ""]
+    ] }
+  ];
+  const A_TOUT_MOMENT = [
+    ["Gérer un écart de calories ou de pas", "On répartit sur les jours restants de la semaine", "Semaine 3 › S'adapter à toutes situations"],
+    ["La pyramide des priorités", "Calories, puis protéines, puis fibres, puis le reste", "Semaine 3 › Pyramide"],
+    ["Mieux dormir", "Un levier par semaine", "Semaine 3 › Sommeil"],
+    ["Bien t'hydrater", "Un verre au réveil et avant chaque repas", "Semaine 3 › Hydratation"],
+    ["Les compléments", "Seulement après un bilan sanguin", "Semaine 3 › Compléments alimentaires"]
+  ];
+
+  function viewParcours() {
+    const phase = phaseAvant(addDays(today(), 1)) || "Observation";
+    const iPhase = ETAPES.indexOf(phase);
+    const enCycles = iPhase >= 3;
+    const etape = (e) => `<li><b>${esc(e[0])}</b>${e[1] ? `<span>${esc(e[1])}</span>` : ""}${e[2] ? `<em>▶ Skool : ${esc(e[2])}</em>` : ""}</li>`;
+    const blocs = PARCOURS.map((p, i) => {
+      // les 3 premières phases se suivent ; les cycles A / B / pause tournent en boucle
+      const etat = p.phase === phase ? "encours" : i < 3 && i < iPhase ? "fait" : i >= 3 && enCycles ? "cycle" : "avenir";
+      const badge = { encours: "Tu es ici", fait: "Fait ✓", cycle: "En boucle", avenir: "À venir" }[etat];
+      return `
+        <section class="card etape-parcours ${etat}">
+          <div class="etape-tete">
+            <span class="numero">${etat === "fait" ? "✓" : i + 1}</span>
+            <div><div class="eyebrow" style="margin:0">${esc(p.phase)}</div><h2 style="margin:0">${esc(p.titre)}</h2></div>
+            <span class="badge-p">${badge}</span>
+          </div>
+          ${etat === "encours" ? `<ol class="etapes">${p.etapes.map(etape).join("")}</ol>` : ""}
+        </section>`;
+    }).join("");
+    return `
+      <section class="card">
+        <div class="eyebrow">Mon parcours</div>
+        <h2>Où j'en suis</h2>
+        <p class="lead">Ta phase actuelle : <b>${esc(phase)}</b>. Tu la changes dans « Ma journée », rubrique « Ma phase ». Les cycles A et B s'enchaînent autant de fois que nécessaire.</p>
+      </section>
+      ${blocs}
+      <section class="card">
+        <div class="eyebrow">À tout moment</div>
+        <h2>Les bases à garder en tête</h2>
+        <ol class="etapes">${A_TOUT_MOMENT.map(etape).join("")}</ol>
+      </section>`;
   }
 
   /* ---------- Outils (calculateurs, pré-remplis avec tes données) ---------- */
@@ -919,6 +1239,8 @@
         <button class="btn2" data-act="save-reperes">Enregistrer mes repères</button>
       </section>
 
+      ${LECTURE ? "" : carteRappel()}
+
       <section class="card" id="install">
         <h2>Installer l'appli</h2>
         <p class="lead">Pour l'ouvrir en un geste, comme une vraie appli.</p>
@@ -963,7 +1285,7 @@
     }
     if (!S.cliente.formDate) { nav.hidden = true; $("#view").innerHTML = viewOnboarding(); return; }
     nav.hidden = false;
-    const views = { progres: viewProgres, outils: viewOutils, reperes: viewReperes };
+    const views = { progres: viewProgres, parcours: viewParcours, outils: viewOutils, reperes: viewReperes };
     $("#view").innerHTML = (views[S.tab] || viewJour)();
     if (LECTURE) $("#view").querySelectorAll("input, textarea").forEach((i) => { i.disabled = true; });
   }
@@ -1004,6 +1326,7 @@
     if (!Object.keys(n.entry).length) delete S.entries[day];
     delete S.drafts[day];
     delete S.touched[day];
+    delete S.modif[day];
     persist();
     enqueue({ kind: "save", date: day, entry: n.entry });
     const complet = MATIN.every((k) => n.entry[k] !== undefined);
@@ -1075,8 +1398,14 @@
       render(); scrollTo(0, 0); return;
     }
 
+    // période de la Progression et jour du bandeau : disponibles aussi en consultation
+    const per = ev.target.closest("[data-periode]");
+    if (per) { S.periode = per.dataset.periode; render(); return; }
+    const jour = ev.target.closest("[data-day]");
+    if (jour) { S.day = jour.dataset.day; render(); return; }
+
     // en consultation, seuls les onglets et le changement de jour répondent
-    if (LECTURE && !ev.target.closest('[data-act="prev"], [data-act="next"], [data-act="info-phase"]')) return;
+    if (LECTURE && !ev.target.closest('[data-act="prev"], [data-act="next"], [data-act="info-phase"], [data-act="modifier"]')) return;
 
     const chip = ev.target.closest("[data-set]");
     if (chip) {
@@ -1116,6 +1445,10 @@
     if (a === "ob-finish") obFinish();
     if (a === "set-prot") { saveProfil({ cibleProt: Number(act.dataset.v) }); toast("Cible protéines enregistrée ✓"); $("#res-macro").innerHTML = macroResults(); }
     if (a === "info-phase") { S.infoPhase = !S.infoPhase; render(); }
+    if (a === "modifier") { S.modif[S.day] = true; render(); }
+    if (a === "rappel-activer") activerRappel(S.drafts.__heure || etatRappel().heure);
+    if (a === "rappel-couper") couperRappel();
+    if (a === "go-rappel") { store.set("phenix:rappel-vu", true); S.tab = "reperes"; render(); setTimeout(() => $("#rappels")?.scrollIntoView({ behavior: "smooth" }), 50); }
     if (a === "toggle-phase") { const d = draftFor(S.day); d.ouvrirPhase = !d.ouvrirPhase; render(); }
     if (a === "toggle-palier") { const d = draftFor(S.day); d.changePalier = !d.changePalier; S.touched[S.day] = true; render(); }
     if (a === "go-install") { store.set("phenix:install-dismissed", true); S.tab = "reperes"; render(); setTimeout(() => $("#install")?.scrollIntoView({ behavior: "smooth" }), 50); }
@@ -1136,6 +1469,11 @@
     }
     if (el.dataset.rep) { (S.drafts.__reperes ||= {})[el.dataset.rep] = el.value; S.touched.__reperes = true; }
     if (el.dataset.s1) { (S.drafts.__s1 ||= {})[el.dataset.s1] = el.value; }
+    if (el.dataset.rappel) {
+      S.drafts.__heure = el.value;
+      const b = $('[data-act="rappel-activer"]'), r = etatRappel();
+      if (b) b.textContent = r.actif ? (el.value !== r.heure ? "Changer l'heure" : "Rappel activé ✓") : "Activer mon rappel";
+    }
     if (el.dataset.ob) { S.ob.d[el.dataset.ob] = el.value; }
     if (el.dataset.tool) {
       const k = el.dataset.tool;

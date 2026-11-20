@@ -1,6 +1,6 @@
 // Service worker : garde l'appli disponible hors connexion.
 // Changer VERSION à chaque mise en ligne pour que les téléphones prennent la nouvelle version.
-const VERSION = "phenix-v9";
+const VERSION = "phenix-v10";
 const SHELL = [
   "./", "index.html", "style.css", "app.js", "config.js", "manifest.webmanifest",
   "icons/logo-96.png", "icons/icon-192-v2.png", "icons/apple-touch-icon-v2.png",
@@ -18,6 +18,26 @@ self.addEventListener("activate", (e) => {
       .then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+// Rappel du matin envoyé par le backend (notification sans contenu : le texte est ici)
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) { /* pas de contenu */ }
+  e.waitUntil(self.registration.showNotification(d.titre || "Phénix 🌿", {
+    body: d.texte || "Après ta pesée, 30 secondes pour noter ta journée.",
+    icon: "icons/icon-192-v2.png",
+    tag: "rappel-phenix",
+    data: { url: d.url || "./" }
+  }));
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((fenetres) => {
+    for (const f of fenetres) if ("focus" in f) return f.focus();
+    return self.clients.openWindow((e.notification.data && e.notification.data.url) || "./");
+  }));
 });
 
 self.addEventListener("fetch", (e) => {
