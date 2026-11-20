@@ -5,6 +5,15 @@
   const API = String(window.PHENIX_API || "").trim();
   const DEMO = !API;
   const ETAPES = ["Observation", "Calibrage", "Maintenance", "Cycle A", "Cycle B", "Pause"];
+  // Rappel de chaque phase (d'après les modules Skool de la méthode Phénix)
+  const PHASES_INFO = {
+    "Observation": "Semaine 1 : tu ne changes rien. Tu photographies tout ce que tu manges dans SnapCalorie, tu notes tes pas et ton poids. À la fin, tu envoies tes moyennes.",
+    "Calibrage": "Tu as calculé ton total théorique. Tu t'en rapproches par paliers de 200 kcal (vers le haut ou vers le bas), en respectant la règle des 72 h.",
+    "Maintenance": "Tu cherches ta maintenance optimisée : d'abord 8 000 pas minimum tenus une semaine, puis +200 kcal par palier tant que ton poids reste stable. S'il monte 3 jours de suite, tu reviens au palier précédent.",
+    "Cycle A": "Déficit : depuis ta maintenance optimisée, −200 kcal à chaque fois que ton poids stagne 3-4 jours. Priorité aux protéines. Tu t'arrêtes quand le poids stagne et que des signes de fatigue apparaissent.",
+    "Cycle B": "Remontée : +200 kcal par palier depuis ta limite basse, jusqu'à retrouver ta maintenance optimisée. C'est aussi le bon moment pour augmenter tes pas.",
+    "Pause": "Tu restes à ta maintenance optimisée quelques semaines (vacances, période chargée, besoin de souffler) avant de relancer un cycle A."
+  };
   const MATIN = ["poids", "pasJour", "sommeil", "forme", "cc"];
   // case d'hier : 1 = fait, 0 = pas fait (seulement si la journée est remplie).
   // « Objectif de pas atteint » (pasOk) n'est plus une case : il se calcule à partir des pas d'hier.
@@ -546,11 +555,15 @@
         <div class="field">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:6px">
             <div>
-              <div class="label">Ma phase</div>
+              <div class="label" style="justify-content:flex-start;align-items:center">Ma phase
+                <button type="button" class="info-btn" data-act="info-phase" aria-expanded="${!!S.infoPhase}" aria-label="À quoi correspond chaque phase ?">i</button></div>
               <div class="hint" style="margin:0">${phase ? `<b>${esc(phase)}</b>${d.etape && d.etape !== avant ? " · change aujourd'hui" : ""}` : "Pas encore choisie"}</div>
             </div>
             <button type="button" class="btn2" style="width:auto;height:40px;margin:0;padding:0 16px" data-act="toggle-phase">${d.ouvrirPhase ? "Fermer" : "Changer"}</button>
           </div>
+          ${S.infoPhase ? `<ul class="phases-info">${ETAPES.map((p) => `
+            <li class="${p === phase ? "on" : ""}"><b>${esc(p)}${p === phase ? " · ta phase" : ""}</b><span>${esc(PHASES_INFO[p])}</span></li>`).join("")}
+          </ul>` : ""}
           ${d.ouvrirPhase ? `${chips("etape", ETAPES, phase, { cols: 3, small: true })}
             <div class="hint" style="margin-top:8px">Choisis ta nouvelle phase le jour où tu en changes, puis enregistre.</div>` : ""}
         </div>`;
@@ -1063,7 +1076,7 @@
     }
 
     // en consultation, seuls les onglets et le changement de jour répondent
-    if (LECTURE && !ev.target.closest('[data-act="prev"], [data-act="next"]')) return;
+    if (LECTURE && !ev.target.closest('[data-act="prev"], [data-act="next"], [data-act="info-phase"]')) return;
 
     const chip = ev.target.closest("[data-set]");
     if (chip) {
@@ -1102,6 +1115,7 @@
     if (a === "ob-back") { S.ob.step = 1; render(); }
     if (a === "ob-finish") obFinish();
     if (a === "set-prot") { saveProfil({ cibleProt: Number(act.dataset.v) }); toast("Cible protéines enregistrée ✓"); $("#res-macro").innerHTML = macroResults(); }
+    if (a === "info-phase") { S.infoPhase = !S.infoPhase; render(); }
     if (a === "toggle-phase") { const d = draftFor(S.day); d.ouvrirPhase = !d.ouvrirPhase; render(); }
     if (a === "toggle-palier") { const d = draftFor(S.day); d.changePalier = !d.changePalier; S.touched[S.day] = true; render(); }
     if (a === "go-install") { store.set("phenix:install-dismissed", true); S.tab = "reperes"; render(); setTimeout(() => $("#install")?.scrollIntoView({ behavior: "smooth" }), 50); }
