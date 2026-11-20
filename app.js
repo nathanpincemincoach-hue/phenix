@@ -1043,7 +1043,7 @@
     ] },
     { phase: "Cycle A", titre: "Cycle A · Déficit", etapes: [
       ["−200 kcal quand ton poids stagne 3-4 jours", "Depuis ta maintenance optimisée", "Semaine 2 › Cycle A"],
-      ["Atteindre ta cible de protéines", "Onglet Outils › Mes macros", "Semaine 3 › Les macro-nutriments"],
+      ["Atteindre ta cible de protéines", "Onglet Outils › Mes macros-nutriments", "Semaine 3 › Les macro-nutriments"],
       ["T'arrêter aux signes de fatigue", "Stagnation + fatigue = ta limite basse", "Semaine 2 › Cycle A"]
     ] },
     { phase: "Cycle B", titre: "Cycle B · Remontée", etapes: [
@@ -1189,7 +1189,7 @@
       </section>
 
       <section class="card calc${S.ouverts.macro ? " ouvert" : ""}">
-        ${tete("macro", "Mes macros", "Protéines, fibres, lipides et glucides", "prot")}
+        ${tete("macro", "Mes macros-nutriments", "Protéines, fibres, lipides et glucides", "prot")}
         ${S.ouverts.macro ? `<div class="acc-corps">
         <p class="lead">Ta répartition selon ton poids et ton palier calorique, à reporter dans SnapCalorie.</p>
         <div class="kv">
