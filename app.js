@@ -87,6 +87,7 @@
     touched: {},
     modif: {},       // journées complètes rouvertes avec « Modifier ma journée »
     periode: "7",    // Progression : 7, 30 ou tout
+    ouverts: {},     // Outils : calculateurs dépliés
     ob: null,        // formulaire de départ en cours
     tools: null,     // valeurs des outils (pré-remplies)
     syncing: false,
@@ -1159,10 +1160,17 @@
   function viewOutils() {
     if (!S.tools) S.tools = toolsDefaults();
     const t = S.tools;
+    // chaque calculateur est une « pile » repliée : on la touche pour la déplier
+    const tete = (cle, titre, sousTitre, icone) => `
+        <button type="button" class="accordeon" data-act="deplier" data-v="${cle}" aria-expanded="${!!S.ouverts[cle]}">
+          ${ico(icone)}
+          <span class="acc-txt"><span class="eyebrow" style="margin:0">Calculateur</span><b>${titre}</b><small>${sousTitre}</small></span>
+          <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </button>`;
     return `
-      <section class="card">
-        <div class="eyebrow">Calculateur</div>
-        <h2>Ma dépense calorique</h2>
+      <section class="card calc${S.ouverts.tdee ? " ouvert" : ""}">
+        ${tete("tdee", "Ma dépense calorique", "Ton total théorique et ton point de départ", "kcal")}
+        ${S.ouverts.tdee ? `<div class="acc-corps">
         <p class="lead">Pré-rempli avec ton formulaire de départ et tes dernières saisies. Tu peux modifier les valeurs.</p>
         <div class="field">
           <div class="label">Sexe</div>
@@ -1177,17 +1185,19 @@
           <div><div class="label">Pas / jour</div>${numInput("tool", "pas", t.pas, "", "8000", "numeric")}</div>
         </div>
         <div id="res-tdee">${tdeeResults()}</div>
+        </div>` : ""}
       </section>
 
-      <section class="card">
-        <div class="eyebrow">Calculateur</div>
-        <h2>Mes macros</h2>
+      <section class="card calc${S.ouverts.macro ? " ouvert" : ""}">
+        ${tete("macro", "Mes macros", "Protéines, fibres, lipides et glucides", "prot")}
+        ${S.ouverts.macro ? `<div class="acc-corps">
         <p class="lead">Ta répartition selon ton poids et ton palier calorique, à reporter dans SnapCalorie.</p>
         <div class="kv">
           <div><div class="label">Poids</div>${numInput("tool", "poids", t.poids, "kg", "70")}</div>
           <div><div class="label">Palier</div>${numInput("tool", "palier", t.palier, "kcal", "1800", "numeric")}</div>
         </div>
         <div id="res-macro">${macroResults()}</div>
+        </div>` : ""}
       </section>
 
       <section class="card">
@@ -1405,7 +1415,7 @@
     if (jour) { S.day = jour.dataset.day; render(); return; }
 
     // en consultation, seuls les onglets et le changement de jour répondent
-    if (LECTURE && !ev.target.closest('[data-act="prev"], [data-act="next"], [data-act="info-phase"], [data-act="modifier"]')) return;
+    if (LECTURE && !ev.target.closest('[data-act="prev"], [data-act="next"], [data-act="info-phase"], [data-act="modifier"], [data-act="deplier"]')) return;
 
     const chip = ev.target.closest("[data-set]");
     if (chip) {
@@ -1443,7 +1453,8 @@
     if (a === "ob-next") obNext();
     if (a === "ob-back") { S.ob.step = 1; render(); }
     if (a === "ob-finish") obFinish();
-    if (a === "set-prot") { saveProfil({ cibleProt: Number(act.dataset.v) }); toast("Cible protéines enregistrée ✓"); $("#res-macro").innerHTML = macroResults(); }
+    if (a === "set-prot") { saveProfil({ cibleProt: Number(act.dataset.v) }); toast("Cible protéines enregistrée ✓"); if ($("#res-macro")) $("#res-macro").innerHTML = macroResults(); }
+    if (a === "deplier") { S.ouverts[act.dataset.v] = !S.ouverts[act.dataset.v]; render(); }
     if (a === "info-phase") { S.infoPhase = !S.infoPhase; render(); }
     if (a === "modifier") { S.modif[S.day] = true; render(); }
     if (a === "rappel-activer") activerRappel(S.drafts.__heure || etatRappel().heure);
@@ -1481,8 +1492,8 @@
       S.touched.__tools = true;
       // le poids apparaît dans les deux calculateurs : on garde les deux champs identiques
       document.querySelectorAll(`[data-tool="${k}"]`).forEach((o) => { if (o !== el) o.value = el.value; });
-      $("#res-tdee").innerHTML = tdeeResults();
-      $("#res-macro").innerHTML = macroResults();
+      if ($("#res-tdee")) $("#res-tdee").innerHTML = tdeeResults();
+      if ($("#res-macro")) $("#res-macro").innerHTML = macroResults();
     }
   });
 
