@@ -7,7 +7,7 @@
   const ETAPES = ["Observation", "Calibrage", "Maintenance", "Cycle A", "Cycle B", "Pause"];
   // Rappel de chaque phase (d'après les modules Skool de la méthode Phénix)
   const PHASES_INFO = {
-    "Observation": "Semaine 1 : tu ne changes rien. Tu photographies tout ce que tu manges dans SnapCalorie, tu notes tes pas et ton poids. À la fin, tu envoies tes moyennes.",
+    "Observation": "Semaine 1 : tu ne changes rien. Tu photographies tout ce que tu manges dans SnapCalorie, tu notes tes pas et ton poids. Au bout de 7 jours, l'appli calcule ta moyenne de pas : tu ajoutes ta moyenne de calories (SnapCalorie) et tu envoies.",
     "Calibrage": "Tu as calculé ton total théorique. Tu t'en rapproches par paliers de 200 kcal (vers le haut ou vers le bas), en respectant la règle des 72 h.",
     "Maintenance": "Tu cherches ta maintenance optimisée : d'abord 8 000 pas minimum tenus une semaine, puis +200 kcal par palier tant que ton poids reste stable. S'il monte 3 jours de suite, tu reviens au palier précédent.",
     "Cycle A": "Déficit : depuis ta maintenance optimisée, −200 kcal à chaque fois que ton poids stagne 3-4 jours. Priorité aux protéines. Tu t'arrêtes quand le poids stagne et que des signes de fatigue apparaissent.",
