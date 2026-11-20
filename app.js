@@ -249,6 +249,8 @@
     return s.length ? Math.round(s[s.length - 1].avg * 10) / 10 : (has(S.cliente.depart) ? Number(S.cliente.depart) : "");
   };
   const objectifPas = () => Number(S.cliente.objectifPas) || Number(S.cliente.maintPas) || 8000;
+  // phase en vigueur avant ce jour (dernière phase choisie)
+  const phaseAvant = (day) => { const p = lastBefore("etape", day); return p ? p.value : ""; };
   // les cases d'hier apparaissent dès qu'un palier existe (fin de la semaine d'observation)
   const hasPalierBefore = (day) => !!lastBefore("palier", day);
   // Moyenne des pas sur les 7 saisies du matin qui finissent à `jour` (chaque saisie = les pas de la veille).
@@ -289,10 +291,6 @@
       const d = {};
       Object.keys(saved).forEach((k) => { d[k] = typeof saved[k] === "number" ? fr(saved[k], 1).replace(/\s/g, "") : saved[k]; });
       CHECKS.forEach((k) => { d[k] = saved[k] === 1; });
-      if (isSunday(day) && !d.etape) {
-        const prev = lastBefore("etape", day);
-        if (prev) d.etape = prev.value;
-      }
       d.changePalier = saved.palier !== undefined;
       S.drafts[day] = d;
     }
@@ -310,7 +308,8 @@
       if (NUM_FIELDS[k] && (n < NUM_FIELDS[k][0] || n > NUM_FIELDS[k][1])) return { error: k };
       e[k] = n;
     }
-    if (isSunday(day) && d.etape) e.etape = d.etape;
+    // la phase n'est enregistrée que le jour où elle change (comme le palier)
+    if (d.etape && d.etape !== phaseAvant(day)) e.etape = d.etape;
     // le dimanche, la moyenne de pas de la semaine se calcule toute seule
     if (isSunday(day)) {
       const m = pasMoyen(day, e.pasJour === undefined ? null : e.pasJour);
@@ -537,12 +536,24 @@
           <div class="label">Protéines · moyenne de la semaine <small>dès le module macros</small></div>
           ${numField("prot", d.prot, "g", has(S.cliente.cibleProt) ? `Cible : ${fr(S.cliente.cibleProt, 0)} g` : "Ex : 110", "numeric")}
         </div>
-        <div class="field">
-          <div class="label">Mon étape</div>
-          ${chips("etape", ETAPES, d.etape, { cols: 3, small: true })}
-        </div>
       </section>` : `
-      <div class="note" style="margin-bottom:14px">Le <b>bilan de la semaine</b> (tour de taille, moyennes, étape) se remplit le dimanche matin, avant l'atelier.</div>`;
+      <div class="note" style="margin-bottom:14px">Le <b>bilan de la semaine</b> (tour de taille, moyennes de calories et de protéines) se remplit le dimanche matin, avant l'atelier.</div>`;
+
+    // Ma phase : affichée chaque jour, modifiable à tout moment
+    const avant = phaseAvant(day);
+    const phase = d.etape || avant;
+    const phaseField = `
+        <div class="field">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:6px">
+            <div>
+              <div class="label">Ma phase</div>
+              <div class="hint" style="margin:0">${phase ? `<b>${esc(phase)}</b>${d.etape && d.etape !== avant ? " · change aujourd'hui" : ""}` : "Pas encore choisie"}</div>
+            </div>
+            <button type="button" class="btn2" style="width:auto;height:40px;margin:0;padding:0 16px" data-act="toggle-phase">${d.ouvrirPhase ? "Fermer" : "Changer"}</button>
+          </div>
+          ${d.ouvrirPhase ? `${chips("etape", ETAPES, phase, { cols: 3, small: true })}
+            <div class="hint" style="margin-top:8px">Choisis ta nouvelle phase le jour où tu en changes, puis enregistre.</div>` : ""}
+        </div>`;
 
     return `
       ${showInstall ? `<div class="note" style="margin:0 0 14px;display:flex;gap:10px;align-items:center;justify-content:space-between">
@@ -605,6 +616,7 @@
           ${d.changePalier ? numField("palier", d.palier, "kcal", pal ? `Ex : ${fr(pal.value + 200, 0)}` : "Ex : 1 800", "numeric") : ""}
           ${palNote}
         </div>
+        ${phaseField}
       </section>
 
       ${week}
@@ -912,7 +924,8 @@
         <h2>Mon rituel</h2>
         <ol class="steps">
           <li><b>Chaque matin</b>, juste après ta pesée (30 s) : poids, pas d'hier, nuit, forme d'hier, cohérences cardiaques d'hier et palier respecté hier. Palier seulement s'il change.</li>
-          <li><b>Le dimanche matin</b>, avant l'atelier (2 min) : tour de taille, moyennes de calories et de protéines, étape. La moyenne de pas se calcule toute seule.</li>
+          <li><b>Le dimanche matin</b>, avant l'atelier (2 min) : tour de taille, moyennes de calories et de protéines. La moyenne de pas se calcule toute seule.</li>
+          <li><b>Tu changes de phase</b> (calibrage, cycle A, cycle B…) ? Indique-le dans « Ma journée », rubrique « Ma phase ».</li>
           <li>Rien à noter ? Laisse vide.</li>
         </ol>
       </section>
@@ -1016,9 +1029,10 @@
     if (!String(d.motivation || "").trim()) { toast("Dis-nous ce que tu veux vraiment changer"); return; }
     const t = today();
     saveProfil({ prenom: String(d.prenom).trim(), sexe: d.sexe, motivation: String(d.motivation).trim(), ...nums.out, form: true });
-    // le poids du formulaire est aussi la pesée du jour
-    if (!(S.entries[t] && S.entries[t].poids !== undefined)) {
-      S.entries[t] = { ...(S.entries[t] || {}), poids: nums.out.depart };
+    // le poids du formulaire est aussi la pesée du jour, et la cliente démarre en phase « Observation »
+    if (!(S.entries[t] && S.entries[t].poids !== undefined) || !phaseAvant(addDays(t, 1))) {
+      const avant = S.entries[t] || {};
+      S.entries[t] = { ...avant, poids: avant.poids !== undefined ? avant.poids : nums.out.depart, etape: avant.etape || "Observation" };
       delete S.drafts[t];
       persist();
       enqueue({ kind: "save", date: t, entry: S.entries[t] });
@@ -1057,6 +1071,7 @@
       const f = chip.dataset.set;
       const v = f === "etape" ? chip.dataset.v : Number(chip.dataset.v);
       d[f] = String(d[f]) === String(v) ? "" : v;
+      if (f === "etape") d.ouvrirPhase = false;
       S.touched[S.day] = true;
       render();
       return;
@@ -1087,6 +1102,7 @@
     if (a === "ob-back") { S.ob.step = 1; render(); }
     if (a === "ob-finish") obFinish();
     if (a === "set-prot") { saveProfil({ cibleProt: Number(act.dataset.v) }); toast("Cible protéines enregistrée ✓"); $("#res-macro").innerHTML = macroResults(); }
+    if (a === "toggle-phase") { const d = draftFor(S.day); d.ouvrirPhase = !d.ouvrirPhase; render(); }
     if (a === "toggle-palier") { const d = draftFor(S.day); d.changePalier = !d.changePalier; S.touched[S.day] = true; render(); }
     if (a === "go-install") { store.set("phenix:install-dismissed", true); S.tab = "reperes"; render(); setTimeout(() => $("#install")?.scrollIntoView({ behavior: "smooth" }), 50); }
     if (a === "install" && installPrompt) { installPrompt.prompt(); installPrompt = null; }
