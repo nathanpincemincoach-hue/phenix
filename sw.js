@@ -1,6 +1,6 @@
 // Service worker : garde l'appli disponible hors connexion.
 // Changer VERSION à chaque mise en ligne pour que les téléphones prennent la nouvelle version.
-const VERSION = "phenix-v12";
+const VERSION = "phenix-v13";
 const SHELL = [
   "./", "index.html", "style.css", "app.js", "config.js", "manifest.webmanifest",
   "icons/logo-96.png", "icons/icon-192-v2.png", "icons/apple-touch-icon-v2.png",
@@ -20,23 +20,45 @@ self.addEventListener("activate", (e) => {
   );
 });
 
-// Rappel du matin envoyé par le backend (notification sans contenu : le texte est ici)
+try { importScripts("config.js"); } catch (_) { /* hors connexion au premier lancement */ }
+
+// Notification envoyée par le backend (sans contenu) : on demande au backend le texte prévu pour ce téléphone
+// (rappel du matin ou atelier du dimanche). En cas d'échec, on affiche le rappel du matin.
 self.addEventListener("push", (e) => {
-  let d = {};
-  try { d = e.data ? e.data.json() : {}; } catch (_) { /* pas de contenu */ }
-  e.waitUntil(self.registration.showNotification(d.titre || "Phénix 🌿", {
-    body: d.texte || "Après ta pesée, 30 secondes pour noter ta journée.",
-    icon: "icons/icon-192-v2.png",
-    tag: "rappel-phenix",
-    data: { url: d.url || "./" }
-  }));
+  e.waitUntil((async () => {
+    let m = null;
+    try { m = e.data ? e.data.json() : null; } catch (_) { /* pas de contenu */ }
+    if (!m && self.PHENIX_API) {
+      try {
+        const sub = await self.registration.pushManager.getSubscription();
+        if (sub) {
+          const r = await fetch(`${self.PHENIX_API}?action=notif&e=${encodeURIComponent(sub.endpoint)}`, { cache: "no-store" });
+          const j = await r.json();
+          if (j && j.ok) m = j;
+        }
+      } catch (_) { /* réseau lent : texte par défaut */ }
+    }
+    m = m || {};
+    await self.registration.showNotification(m.titre || "Phénix 🌿", {
+      body: m.texte || "Après ta pesée, 30 secondes pour noter ta journée.",
+      icon: "icons/icon-192-v2.png",
+      tag: m.tag || "rappel-phenix",
+      data: { url: m.url || "./" }
+    });
+  })());
 });
 
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || "./";
+  // lien externe (live de l'atelier) : on l'ouvre ; sinon on revient dans l'appli
+  if (/^https?:\/\//.test(url) && !url.startsWith(self.location.origin)) {
+    e.waitUntil(self.clients.openWindow(url));
+    return;
+  }
   e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((fenetres) => {
     for (const f of fenetres) if ("focus" in f) return f.focus();
-    return self.clients.openWindow((e.notification.data && e.notification.data.url) || "./");
+    return self.clients.openWindow(url);
   }));
 });
 

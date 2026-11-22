@@ -517,7 +517,7 @@
   const enApp = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   const estIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
   const CLE_RAPPEL = () => `phenix:rappel:${code}`;
-  const etatRappel = () => Object.assign({ actif: false, heure: "08:00" }, store.get(CLE_RAPPEL()) || {});
+  const etatRappel = () => Object.assign({ actif: false, heure: "08:00", ateliers: true }, store.get(CLE_RAPPEL()) || {});
   function octetsDe(b64) {
     const s = atob((b64 + "===".slice((b64.length + 3) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
     return Uint8Array.from(s, (c) => c.charCodeAt(0));
@@ -530,8 +530,9 @@
     try {
       const reg = await navigator.serviceWorker.ready;
       const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: octetsDe(VAPID) });
-      await apiPost({ action: "rappel", code, abonnement: { endpoint: sub.endpoint }, heure, actif: true });
-      store.set(CLE_RAPPEL(), { actif: true, heure });
+      const ateliers = etatRappel().ateliers;
+      await apiPost({ action: "rappel", code, abonnement: { endpoint: sub.endpoint }, heure, actif: true, ateliers });
+      store.set(CLE_RAPPEL(), { actif: true, heure, ateliers });
       toast(`Rappel activé à ${heure.replace(":", " h ")} ✓`);
     } catch (err) {
       toast(navigator.onLine ? "Impossible d'activer le rappel, réessaie" : "Connecte-toi à internet pour activer le rappel");
@@ -543,13 +544,28 @@
     try {
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.getSubscription();
-      if (sub && !DEMO) await apiPost({ action: "rappel", code, abonnement: { endpoint: sub.endpoint }, heure: r.heure, actif: false });
+      if (sub && !DEMO) await apiPost({ action: "rappel", code, abonnement: { endpoint: sub.endpoint }, heure: r.heure, actif: false, ateliers: r.ateliers });
       if (sub) await sub.unsubscribe();
-      store.set(CLE_RAPPEL(), { actif: false, heure: r.heure });
+      store.set(CLE_RAPPEL(), { actif: false, heure: r.heure, ateliers: r.ateliers });
       toast("Rappel coupé");
     } catch (_) { toast("Impossible de couper le rappel, réessaie"); }
     render();
   }
+  // Ateliers du dimanche : on/off (enregistré tout de suite si les notifications sont déjà actives)
+  async function basculerAteliers() {
+    const r = etatRappel();
+    const ateliers = !r.ateliers;
+    store.set(CLE_RAPPEL(), Object.assign(r, { ateliers }));
+    render();
+    if (!r.actif || DEMO) return;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) await apiPost({ action: "rappel", code, abonnement: { endpoint: sub.endpoint }, heure: r.heure, actif: true, ateliers });
+      toast(ateliers ? "Notifications des ateliers activées ✓" : "Notifications des ateliers coupées");
+    } catch (_) { toast("Connecte-toi à internet pour enregistrer ce choix"); }
+  }
+
   function carteRappel() {
     const r = etatRappel();
     const heure = S.drafts.__heure || r.heure;
@@ -564,6 +580,10 @@
           <div class="label">Heure du rappel <small>chaque jour</small></div>
           <div class="num"><input type="time" data-rappel="heure" value="${esc(heure)}" aria-label="Heure du rappel"></div>
         </div>
+        <button type="button" class="check${r.ateliers ? " on" : ""}" data-act="rappel-ateliers" role="checkbox" aria-checked="${r.ateliers}">
+          <span class="box" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+          <span class="txt"><b>Me prévenir des ateliers du dimanche</b><small>À 19 h (1 h avant) et à 20 h, au début du live</small></span>
+        </button>
         ${r.actif ? `<div class="note">🔔 Rappel actif à <b>${esc(r.heure.replace(":", " h "))}</b>. Tu ne le reçois pas si ta journée est déjà notée.</div>` : ""}
         <button class="save" style="position:static;margin-top:12px" data-act="rappel-activer">${r.actif ? (heure !== r.heure ? "Changer l'heure" : "Rappel activé ✓") : "Activer mon rappel"}</button>
         ${r.actif ? `<button class="btn2" data-act="rappel-couper">Couper le rappel</button>` : ""}`;
@@ -571,8 +591,8 @@
     return `
       <section class="card" id="rappels">
         <div class="eyebrow">Notifications</div>
-        <h2>Mon rappel du matin</h2>
-        <p class="lead">Une notification à l'heure de ton choix, juste après ta pesée. Seulement si ta journée n'est pas encore notée.</p>
+        <h2>Mes notifications</h2>
+        <p class="lead">Un rappel le matin à l'heure de ton choix, seulement si ta journée n'est pas encore notée. Et, si tu le souhaites, un rappel pour les ateliers du dimanche.</p>
         ${corps}
       </section>`;
   }
@@ -1459,6 +1479,7 @@
     if (a === "modifier") { S.modif[S.day] = true; render(); }
     if (a === "rappel-activer") activerRappel(S.drafts.__heure || etatRappel().heure);
     if (a === "rappel-couper") couperRappel();
+    if (a === "rappel-ateliers") basculerAteliers();
     if (a === "go-rappel") { store.set("phenix:rappel-vu", true); S.tab = "reperes"; render(); setTimeout(() => $("#rappels")?.scrollIntoView({ behavior: "smooth" }), 50); }
     if (a === "toggle-phase") { const d = draftFor(S.day); d.ouvrirPhase = !d.ouvrirPhase; render(); }
     if (a === "toggle-palier") { const d = draftFor(S.day); d.changePalier = !d.changePalier; S.touched[S.day] = true; render(); }
