@@ -1536,8 +1536,25 @@
     navigator.serviceWorker.register("sw.js").catch(() => {});
   }
 
+  /* ---------- bandeau « atelier en direct » (dimanche 20 h - 21 h, heure de Paris) ---------- */
+  const FORCER_LIVE = DEMO && params.has("live"); // test en local
+  function liveEnCours() {
+    if (FORCER_LIVE) return true;
+    const p = {};
+    new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Paris", weekday: "short", hour: "2-digit", hourCycle: "h23" })
+      .formatToParts(new Date()).forEach((x) => { p[x.type] = x.value; });
+    return p.weekday === "Sun" && p.hour === "20";
+  }
+  function majLive() {
+    const el = $("#live");
+    if (el) el.hidden = !(code && !LECTURE && liveEnCours());
+  }
+  setInterval(majLive, 30000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") majLive(); });
+
   /* ---------- démarrage ---------- */
   if (DEMO && code) seedDemo();
   render();
+  majLive();
   loadRemote();
 })();
