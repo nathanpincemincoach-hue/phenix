@@ -827,24 +827,32 @@
       ${bravo && !isSunday(day) ? "" : `<button class="save" data-act="save" ${isDirty(day) ? "" : "disabled"}>${saveLabel(day)}</button>`}`;
   }
 
+  // Échelle serrée : on veut lire des variations de 300-500 g sur 4-5 jours.
+  // L'axe colle aux pesées (marge de 0,2 kg, 1 kg minimum) et les graduations vont de 100 g en 100 g à 1 kg selon l'écart.
   function chartSvg(series, depart) {
-    const W = 340, H = 200, P = { l: 34, r: 10, t: 12, b: 26 };
-    const ws = series.map((p) => p.w).concat(depart ? [depart] : []);
-    let lo = Math.min(...ws), hi = Math.max(...ws);
-    if (hi - lo < 2) { const m = (hi + lo) / 2; lo = m - 1; hi = m + 1; }
-    lo = Math.floor(lo * 2) / 2 - 0.5; hi = Math.ceil(hi * 2) / 2 + 0.5;
+    const W = 340, H = 230, P = { l: 38, r: 12, t: 18, b: 26 };
+    const ws = series.map((p) => p.w).concat(series.map((p) => p.avg), depart ? [depart] : []);
+    let lo = Math.min(...ws) - 0.2, hi = Math.max(...ws) + 0.2;
+    if (hi - lo < 1) { const m = (hi + lo) / 2; lo = m - 0.5; hi = m + 0.5; }
+    const pas = [0.1, 0.2, 0.5, 1, 2, 5].find((s) => (hi - lo) / s <= 6) || 10;
+    lo = Math.floor(lo / pas) * pas; hi = Math.ceil(hi / pas) * pas;
     const d0 = series[0].d, span = Math.max(1, diffDays(series[series.length - 1].d, d0));
     const x = (d) => P.l + (diffDays(d, d0) / span) * (W - P.l - P.r);
     const y = (w) => P.t + (1 - (w - lo) / (hi - lo)) * (H - P.t - P.b);
     const avgPath = series.map((p, i) => `${i ? "L" : "M"}${x(p.d).toFixed(1)},${y(p.avg).toFixed(1)}`).join("");
-    const ticks = [lo + 0.5, (lo + hi) / 2, hi - 0.5];
+    const pesPath = series.map((p, i) => `${i ? "L" : "M"}${x(p.d).toFixed(1)},${y(p.w).toFixed(1)}`).join("");
+    const ticks = [];
+    for (let t = lo; t <= hi + 1e-9; t += pas) ticks.push(Math.round(t * 10) / 10);
+    const etiquettes = series.length <= 10; // sur 7 jours : le poids exact au-dessus de chaque pesée
     return `
       <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Courbe du poids">
-        ${ticks.map((t) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y(t)}" y2="${y(t)}" stroke="#EAF2EC" stroke-width="1"/>
-          <text x="${P.l - 6}" y="${y(t) + 4}" font-size="10.5" fill="#4A5E51" text-anchor="end">${fr(t)}</text>`).join("")}
+        ${ticks.map((t) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" stroke="#EAF2EC" stroke-width="1"/>
+          <text x="${P.l - 6}" y="${(y(t) + 4).toFixed(1)}" font-size="10.5" fill="#4A5E51" text-anchor="end">${fr(t)}</text>`).join("")}
         ${depart ? `<line x1="${P.l}" x2="${W - P.r}" y1="${y(depart)}" y2="${y(depart)}" stroke="#82A38B" stroke-width="1.5" stroke-dasharray="4 4"/>` : ""}
-        ${series.map((p) => `<circle cx="${x(p.d).toFixed(1)}" cy="${y(p.w).toFixed(1)}" r="2.6" fill="#82A38B" opacity=".55"/>`).join("")}
+        <path d="${pesPath}" fill="none" stroke="#82A38B" stroke-width="1.2" opacity=".45" stroke-linejoin="round"/>
+        ${series.map((p) => `<circle cx="${x(p.d).toFixed(1)}" cy="${y(p.w).toFixed(1)}" r="3" fill="#82A38B" opacity=".75"><title>${shortDate(p.d)} : ${fr(p.w)} kg</title></circle>`).join("")}
         <path d="${avgPath}" fill="none" stroke="#EE6055" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        ${etiquettes ? series.map((p, i) => `<text x="${(x(p.d) + (i === 0 ? -2 : i === series.length - 1 ? 2 : 0)).toFixed(1)}" y="${(y(p.w) - 7).toFixed(1)}" font-size="10" font-weight="700" fill="#4A5E51" stroke="#fff" stroke-width="3" paint-order="stroke" text-anchor="${i === 0 ? "start" : i === series.length - 1 ? "end" : "middle"}">${fr(p.w)}</text>`).join("") : ""}
         <text x="${P.l}" y="${H - 6}" font-size="10.5" fill="#4A5E51">${shortDate(d0)}</text>
         <text x="${W - P.r}" y="${H - 6}" font-size="10.5" fill="#4A5E51" text-anchor="end">${shortDate(series[series.length - 1].d)}</text>
       </svg>`;
@@ -1127,7 +1135,11 @@
       age: inputVal(c.age), taille: inputVal(c.taille),
       poids: inputVal(poidsActuel()),
       pas: inputVal(pas ? pas.value : has(c.moyPasS1) ? c.moyPasS1 : ""),
-      palier: inputVal(pal ? pal.value : has(c.maintKcal) ? c.maintKcal : "")
+      palier: inputVal(pal ? pal.value : has(c.maintKcal) ? c.maintKcal : ""),
+      // comparatif : moyennes du dernier bilan du dimanche (calories, protéines)
+      cKcal: inputVal((lastBefore("kcal", today(), true) || {}).value ?? ""),
+      cProt: inputVal((lastBefore("prot", today(), true) || {}).value ?? ""),
+      cLip: "", cGlu: "", cFib: ""
     };
   }
 
@@ -1177,6 +1189,45 @@
       <button class="btn2" data-act="set-prot" data-v="${prot}" ${deja ? "disabled" : ""}>${deja ? `Cible protéines enregistrée : ${prot} g ✓` : `Utiliser ${prot} g comme cible protéines`}</button>`;
   }
 
+  // Comparatif apports réels / recommandations (même règle que l'artifact « Comparatif apports réels »)
+  // ordre = priorité de correction : calories, protéines, fibres, lipides, glucides
+  const COMP = [
+    ["Calories", "kcal", "cKcal", "palier", (e) => e > -100 && e < 100, "m-tot"],
+    ["Protéines", "g", "cProt", "prot", (e) => e > -10, "m-prot"],
+    ["Fibres", "g", "cFib", "fib", (e) => e > -10 && e < 10, "m-fib"],
+    ["Lipides", "g", "cLip", "lip", (e) => e > -10 && e < 10, "m-lip"],
+    ["Glucides", "g", "cGlu", "glu", (e) => e > -30 && e < 30, "m-glu"]
+  ];
+  function compResults() {
+    const r = calcMacros(S.tools);
+    if (!r) return `<div class="hint" style="margin-top:12px">Remplis ton poids et ton palier pour voir tes recommandations.</div>`;
+    const lignes = COMP.map(([lib, u, champ, rec, ok, cl]) => {
+      const R = Math.round(r[rec]), v = toNum(S.tools[champ]);
+      const C = typeof v === "number" && !isNaN(v) ? Math.round(v) : null;
+      const e = C === null ? null : C - R;
+      return { lib, u, cl, R, C, e, bon: e === null ? null : ok(e) };
+    });
+    const faites = lignes.filter((l) => l.C !== null);
+    if (!faites.length) return `<div class="hint" style="margin-top:12px">Note tes moyennes de la semaine (SnapCalorie) pour comparer.</div>`;
+    const prio = lignes.find((l) => l.bon === false);
+    const tete = prio
+      ? `<div class="comp-prio mauvais"><b>À améliorer en priorité : ${prio.lib.toLowerCase()}</b><span>C'est l'écart le plus important à corriger en premier, avant les autres.</span></div>`
+      : faites.length === lignes.length
+        ? `<div class="comp-prio bon"><b>Tous les objectifs sont atteints</b><span>Tous les écarts sont dans les marges, rien à corriger en priorité.</span></div>`
+        : `<div class="comp-prio bon"><b>Rien à corriger pour l'instant</b><span>Remplis les autres moyennes pour un comparatif complet.</span></div>`;
+    const signe = (n) => (n > 0 ? "+" : n < 0 ? "−" : "") + fr(Math.abs(n), 0);
+    return tete + `<div class="comp">${lignes.map((l) => `
+      <div class="comp-l ${l.cl}">
+        <div class="comp-t"><b>${l.lib}</b>${l.bon === null ? "" : `<span class="pastille ${l.bon ? "ok" : "ko"}">${l.bon ? "✓" : "✕"}</span>`}</div>
+        <div class="comp-v">
+          <div><small>Recommandé</small><b>${fr(l.R, 0)} ${l.u}</b></div>
+          <div><small>Consommé</small><b>${l.C === null ? "—" : fr(l.C, 0) + " " + l.u}</b></div>
+          <div><small>Écart</small><b class="${l.bon === null ? "" : l.bon ? "e-ok" : "e-ko"}">${l.e === null ? "—" : signe(l.e) + " " + l.u}</b></div>
+        </div>
+      </div>`).join("")}</div>
+      <div class="hint" style="margin-top:8px">Marges : calories ±100 kcal, protéines pas plus de 10 g sous la cible, fibres et lipides ±10 g, glucides ±30 g.</div>`;
+  }
+
   function viewOutils() {
     if (!S.tools) S.tools = toolsDefaults();
     const t = S.tools;
@@ -1217,6 +1268,31 @@
           <div><div class="label">Palier</div>${numInput("tool", "palier", t.palier, "kcal", "1800", "numeric")}</div>
         </div>
         <div id="res-macro">${macroResults()}</div>
+        </div>` : ""}
+      </section>
+
+      <section class="card calc${S.ouverts.comp ? " ouvert" : ""}">
+        ${tete("comp", "Mes apports réels", "Tes moyennes comparées à tes recommandations", "kcal")}
+        ${S.ouverts.comp ? `<div class="acc-corps">
+        <p class="lead">Compare tes moyennes réelles (SnapCalorie) à tes recommandations pour savoir quoi ajuster en priorité.</p>
+        <div class="kv">
+          <div><div class="label">Poids</div>${numInput("tool", "poids", t.poids, "kg", "70")}</div>
+          <div><div class="label">Palier</div>${numInput("tool", "palier", t.palier, "kcal", "1800", "numeric")}</div>
+        </div>
+        <div class="eyebrow" style="margin-top:16px">Mes moyennes réellement consommées</div>
+        <div class="kv">
+          <div><div class="label">Calories</div>${numInput("tool", "cKcal", t.cKcal, "kcal", "1700", "numeric")}</div>
+          <div><div class="label">Protéines</div>${numInput("tool", "cProt", t.cProt, "g", "95", "numeric")}</div>
+        </div>
+        <div class="kv" style="margin-top:10px">
+          <div><div class="label">Fibres</div>${numInput("tool", "cFib", t.cFib, "g", "20", "numeric")}</div>
+          <div><div class="label">Lipides</div>${numInput("tool", "cLip", t.cLip, "g", "60", "numeric")}</div>
+        </div>
+        <div class="kv" style="margin-top:10px">
+          <div><div class="label">Glucides</div>${numInput("tool", "cGlu", t.cGlu, "g", "170", "numeric")}</div>
+          <div></div>
+        </div>
+        <div id="res-comp">${compResults()}</div>
         </div>` : ""}
       </section>
 
@@ -1515,6 +1591,7 @@
       document.querySelectorAll(`[data-tool="${k}"]`).forEach((o) => { if (o !== el) o.value = el.value; });
       if ($("#res-tdee")) $("#res-tdee").innerHTML = tdeeResults();
       if ($("#res-macro")) $("#res-macro").innerHTML = macroResults();
+      if ($("#res-comp")) $("#res-comp").innerHTML = compResults();
     }
   });
 

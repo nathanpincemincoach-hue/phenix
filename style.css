@@ -224,6 +224,26 @@ textarea:focus { outline: none; border-color: var(--sauge); box-shadow: 0 0 0 4p
 .m-fib { background: #D4F5A8; }
 .m-lip { background: #FFF1B0; }
 .m-glu { background: #B5EEF2; }
+.m-tot { background: #ECE6DA; }
+/* Comparatif apports réels */
+.comp-prio { margin-top: 14px; border-radius: 14px; padding: 12px 14px; }
+.comp-prio b { display: block; font-size: 15px; }
+.comp-prio span { font-size: 13px; color: var(--foret-douce); }
+.comp-prio.mauvais { background: #FFE9E3; }
+.comp-prio.mauvais b { color: var(--corail-fonce); }
+.comp-prio.bon { background: var(--menthe); }
+.comp-prio.bon b { color: #2F6B3F; }
+.comp { display: grid; gap: 8px; margin-top: 10px; }
+.comp-l { border-radius: 14px; padding: 10px 14px; color: #1c1a17; }
+.comp-t { display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+.pastille { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 12px; font-weight: 800; box-shadow: 0 0 0 2px #fff; }
+.pastille.ok { background: #2F7D32; }
+.pastille.ko { background: #C62828; }
+.comp-v { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(28, 26, 23, .14); }
+.comp-v small { display: block; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; opacity: .65; }
+.comp-v b { font-size: 14px; white-space: nowrap; }
+.comp-v .e-ok { color: #2F7D32; }
+.comp-v .e-ko { color: #C62828; }
 .rules { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
 .rules li { border-radius: 12px; padding: 10px 12px; background: var(--lait); border: 1px solid var(--menthe); }
 .rules li b { display: block; }

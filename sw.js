@@ -1,6 +1,6 @@
 // Service worker : garde l'appli disponible hors connexion.
 // Changer VERSION à chaque mise en ligne pour que les téléphones prennent la nouvelle version.
-const VERSION = "phenix-v14";
+const VERSION = "phenix-v15";
 const SHELL = [
   "./", "index.html", "style.css", "app.js", "config.js", "manifest.webmanifest",
   "icons/logo-96.png", "icons/icon-192-v2.png", "icons/apple-touch-icon-v2.png",
