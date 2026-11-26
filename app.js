@@ -6,8 +6,8 @@
   const DEMO = !API;
   const ETAPES = ["Observation", "Calibrage", "Maintenance", "Cycle A", "Cycle B", "Pause"];
   // emoji de chaque phase (affichage seulement : le Sheets garde le nom seul)
-  const EMOJI_PHASE = { "Observation": "👁️", "Calibrage": "🎯", "Maintenance": "⚖️", "Cycle A": "⬇️", "Cycle B": "⬆️", "Pause": "⏸️" };
-  const ph = (p) => (p ? (EMOJI_PHASE[p] ? EMOJI_PHASE[p] + " " : "") + p : "");
+  const EMOJI_PHASE = { "Observation": "👁️", "Calibrage": "🎯", "Maintenance": "⚖️", "Cycle A": "📉", "Cycle B": "📈", "Pause": "⏸️" };
+  const ph = (p) => (p ? p + (EMOJI_PHASE[p] ? " " + EMOJI_PHASE[p] : "") : "");
   // Rappel de chaque phase (d'après les modules Skool de la méthode Phénix)
   const PHASES_INFO = {
     "Observation": "Semaine 1 : tu ne changes rien. Tu photographies tout ce que tu manges dans SnapCalorie, tu notes tes pas et ton poids. Au bout de 7 jours, l'appli calcule ta moyenne de pas : tu ajoutes ta moyenne de calories (SnapCalorie) et tu envoies.",
