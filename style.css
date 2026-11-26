@@ -284,7 +284,14 @@ textarea:focus { outline: none; border-color: var(--sauge); box-shadow: 0 0 0 4p
 .ico svg { width: 18px; height: 18px; fill: none; stroke: #5E8C6A; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 /* Bandeau de la semaine */
-.semaine { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin: 0 0 12px; }
+/* glissable vers la gauche pour remonter dans les semaines passées ; 7 jours visibles */
+.semaine {
+  position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: calc((100% - 36px) / 7);
+  gap: 6px; margin: -3px -3px 9px; padding: 3px; overflow-x: auto; scroll-snap-type: x mandatory;
+  scroll-padding: 0 3px; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.semaine::-webkit-scrollbar { display: none; }
+.semaine .jour { scroll-snap-align: end; }
 .jour {
   border: 1.5px solid var(--sauge-35); background: var(--carte); border-radius: 14px;
   padding: 6px 0 8px; display: flex; flex-direction: column; align-items: center; gap: 2px;

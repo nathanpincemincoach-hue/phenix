@@ -626,11 +626,18 @@
     const n = MATIN.filter((k) => e[k] !== undefined).length;
     return n === 0 ? "vide" : n === MATIN.length ? "complet" : "partiel";
   };
+  // premier jour consultable : la toute première saisie (au moins 2 semaines en arrière pour rattraper)
+  const premierJour = () => {
+    const min = addDays(today(), -JOURS_ARRIERE), ds = dates();
+    return ds[0] && ds[0] < min ? ds[0] : min;
+  };
+  // bandeau glissable : du premier jour à aujourd'hui, 7 jours visibles, aujourd'hui à droite
+  let bandeauFin = 0; // position du bandeau, en pixels depuis le bord droit (voir caleBandeau)
   function bandeauSemaine(day) {
     const t = today();
     const jours = [];
-    for (let i = 6; i >= 0; i--) jours.push(addDays(t, -i));
-    return `<div class="semaine">${jours.map((d) => {
+    for (let d = premierJour(); d <= t; d = addDays(d, 1)) jours.push(d);
+    return `<div class="semaine" id="semaine">${jours.map((d) => {
       const et = etatJour(d), p = parse(d);
       const j = p.toLocaleDateString("fr-FR", { weekday: "short" }).replace(".", "").slice(0, 3);
       return `<button type="button" class="jour ${et}${d === day ? " sel" : ""}" data-day="${d}" aria-label="${longDate(d)}${et === "complet" ? " · rempli" : ""}">
@@ -818,7 +825,7 @@
       ${off === 0 ? cardSemaine1() : ""}
       ${bandeauSemaine(day)}
       <div class="daybar">
-        <button data-act="prev" aria-label="Jour précédent" ${off >= JOURS_ARRIERE ? "disabled" : ""}>‹</button>
+        <button data-act="prev" aria-label="Jour précédent" ${day <= premierJour() ? "disabled" : ""}>‹</button>
         <div class="daylabel"><b>${title}</b><span>${longDate(day)}</span></div>
         <button data-act="next" aria-label="Jour suivant" ${off <= 0 ? "disabled" : ""}>›</button>
       </div>
@@ -1418,8 +1425,26 @@
     if (!S.cliente.formDate) { nav.hidden = true; $("#view").innerHTML = viewOnboarding(); return; }
     nav.hidden = false;
     const views = { progres: viewProgres, parcours: viewParcours, outils: viewOutils, reperes: viewReperes };
+    const ancien = $("#semaine");
+    if (ancien) bandeauFin = ancien.scrollWidth - ancien.clientWidth - ancien.scrollLeft;
     $("#view").innerHTML = (views[S.tab] || viewJour)();
     if (LECTURE) $("#view").querySelectorAll("input, textarea").forEach((i) => { i.disabled = true; });
+    caleBandeau();
+  }
+
+  // Le bandeau est reconstruit à chaque affichage : on garde sa position (comptée depuis la droite,
+  // pour qu'elle tienne même si des jours anciens arrivent du serveur) et on montre toujours le jour choisi.
+  function caleBandeau() {
+    const el = $("#semaine");
+    if (!el) return;
+    const max = el.scrollWidth - el.clientWidth;
+    el.scrollLeft = Math.max(0, max - bandeauFin);
+    const s = el.querySelector(".sel");
+    if (s) {
+      if (s.offsetLeft < el.scrollLeft) el.scrollLeft = s.offsetLeft;
+      else if (s.offsetLeft + s.offsetWidth > el.scrollLeft + el.clientWidth) el.scrollLeft = s.offsetLeft + s.offsetWidth - el.clientWidth;
+    }
+    bandeauFin = max - el.scrollLeft;
   }
 
   function toast(msg) {
