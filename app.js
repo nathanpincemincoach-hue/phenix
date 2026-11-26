@@ -5,6 +5,9 @@
   const API = String(window.PHENIX_API || "").trim();
   const DEMO = !API;
   const ETAPES = ["Observation", "Calibrage", "Maintenance", "Cycle A", "Cycle B", "Pause"];
+  // emoji de chaque phase (affichage seulement : le Sheets garde le nom seul)
+  const EMOJI_PHASE = { "Observation": "👁️", "Calibrage": "🎯", "Maintenance": "⚖️", "Cycle A": "⬇️", "Cycle B": "⬆️", "Pause": "⏸️" };
+  const ph = (p) => (p ? (EMOJI_PHASE[p] ? EMOJI_PHASE[p] + " " : "") + p : "");
   // Rappel de chaque phase (d'après les modules Skool de la méthode Phénix)
   const PHASES_INFO = {
     "Observation": "Semaine 1 : tu ne changes rien. Tu photographies tout ce que tu manges dans SnapCalorie, tu notes tes pas et ton poids. Au bout de 7 jours, l'appli calcule ta moyenne de pas : tu ajoutes ta moyenne de calories (SnapCalorie) et tu envoies.",
@@ -679,7 +682,7 @@
           ${ligne("forme", `Forme d'hier <b>${e.forme}/5</b>`)}
           ${ligne("cc", `<b>${e.cc}/3</b> cohérence${e.cc > 1 ? "s" : ""} cardiaque${e.cc > 1 ? "s" : ""}`)}
           ${typeof e.palOk === "number" ? ligne("palOk", e.palOk ? "Palier respecté ✓" : "Palier pas respecté hier") : ""}
-          ${phase ? ligne("phase", `Phase : <b>${esc(phase)}</b>`) : ""}
+          ${phase ? ligne("phase", `Phase : <b>${esc(ph(phase))}</b>`) : ""}
         </ul>
         <button class="btn2" data-act="modifier">Modifier ma journée</button>
       </section>`;
@@ -739,14 +742,14 @@
             <div>
               <div class="label" style="justify-content:flex-start;align-items:center"><span class="lab">${ico("phase")}Ma phase</span>
                 <button type="button" class="info-btn" data-act="info-phase" aria-expanded="${!!S.infoPhase}" aria-label="À quoi correspond chaque phase ?">i</button></div>
-              <div class="hint" style="margin:0 0 0 40px">${phase ? `<b>${esc(phase)}</b>${d.etape && d.etape !== avant ? " · change aujourd'hui" : ""}` : "Pas encore choisie"}</div>
+              <div class="hint" style="margin:0 0 0 40px">${phase ? `<b>${esc(ph(phase))}</b>${d.etape && d.etape !== avant ? " · change aujourd'hui" : ""}` : "Pas encore choisie"}</div>
             </div>
             <button type="button" class="btn2" style="width:auto;height:40px;margin:0;padding:0 16px" data-act="toggle-phase">${d.ouvrirPhase ? "Fermer" : "Changer"}</button>
           </div>
           ${S.infoPhase ? `<ul class="phases-info">${ETAPES.map((p) => `
-            <li class="${p === phase ? "on" : ""}"><b>${esc(p)}${p === phase ? " · ta phase" : ""}</b><span>${esc(PHASES_INFO[p])}</span></li>`).join("")}
+            <li class="${p === phase ? "on" : ""}"><b>${esc(ph(p))}${p === phase ? " · ta phase" : ""}</b><span>${esc(PHASES_INFO[p])}</span></li>`).join("")}
           </ul>` : ""}
-          ${d.ouvrirPhase ? `${chips("etape", ETAPES, phase, { cols: 3, small: true })}
+          ${d.ouvrirPhase ? `${chips("etape", ETAPES, phase, { cols: 2, small: true, labels: ETAPES.map(ph) })}
             <div class="hint" style="margin-top:8px">Choisis ta nouvelle phase le jour où tu en changes, puis enregistre.</div>` : ""}
         </div>`;
 
@@ -1111,7 +1114,7 @@
         <section class="card etape-parcours ${etat}">
           <div class="etape-tete">
             <span class="numero">${etat === "fait" ? "✓" : i + 1}</span>
-            <div><div class="eyebrow" style="margin:0">${esc(p.phase)}</div><h2 style="margin:0">${esc(p.titre)}</h2></div>
+            <div><div class="eyebrow" style="margin:0">${esc(ph(p.phase))}</div><h2 style="margin:0">${esc(p.titre)}</h2></div>
             <span class="badge-p">${badge}</span>
           </div>
           ${etat === "encours" ? `<ol class="etapes">${p.etapes.map(etape).join("")}</ol>` : ""}
@@ -1121,7 +1124,7 @@
       <section class="card">
         <div class="eyebrow">Mon parcours</div>
         <h2>Où j'en suis</h2>
-        <p class="lead">Ta phase actuelle : <b>${esc(phase)}</b>. Tu la changes dans « Ma journée », rubrique « Ma phase ». Les cycles A et B s'enchaînent autant de fois que nécessaire.</p>
+        <p class="lead">Ta phase actuelle : <b>${esc(ph(phase))}</b>. Tu la changes dans « Ma journée », rubrique « Ma phase ». Les cycles A et B s'enchaînent autant de fois que nécessaire.</p>
       </section>
       ${blocs}
       <section class="card">
