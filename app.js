@@ -958,8 +958,15 @@
     const b = bornesPeriode();
     const series = weightSeries();
     const onglets = `<div class="periodes">${PERIODES.map(([v, l]) => `<button type="button" data-periode="${v}" class="${S.periode === v ? "on" : ""}">${l}</button>`).join("")}</div>`;
-    const motivation = S.cliente.motivation ? `<section class="card"><div class="eyebrow">Ce que je veux vraiment changer</div>
-      <p style="margin:6px 0 0;font:400 20px/1.35 var(--serif);font-style:italic">« ${esc(S.cliente.motivation)} »</p></section>` : "";
+    // objectif de la cliente (poids cible + motivation), modifiable dans Repères
+    const cible = toNum(S.cliente.poidsCible), actuelP = poidsActuel();
+    const resteKg = typeof cible === "number" && cible > 0 && typeof actuelP === "number" ? actuelP - cible : null;
+    const motivation = S.cliente.motivation || (typeof cible === "number" && cible > 0) ? `<section class="card">
+      <div class="eyebrow">Mon objectif</div>
+      ${typeof cible === "number" && cible > 0 ? `<p style="margin:6px 0 0">Poids cible : <b>${fr(cible)} kg</b>${resteKg !== null ? (resteKg > 0.05 ? ` · encore ${fr(resteKg)} kg` : " · atteint 🎉") : ""}</p>` : ""}
+      ${S.cliente.motivation ? `<p style="margin:8px 0 0;font:400 20px/1.35 var(--serif);font-style:italic">« ${esc(S.cliente.motivation)} »</p>` : ""}
+      ${LECTURE ? "" : `<button class="btn2" data-act="go-objectif">Modifier mon objectif</button>`}
+    </section>` : "";
     const obj = objectifPas();
 
     // séries en cours
@@ -1316,9 +1323,25 @@
       depart: inputVal(c.depart), objectifPas: inputVal(c.objectifPas), maintKcal: inputVal(c.maintKcal),
       maintPas: inputVal(c.maintPas), cibleProt: inputVal(c.cibleProt)
     });
+    const o = S.drafts.__objectif || (S.drafts.__objectif = { poidsCible: inputVal(c.poidsCible), motivation: c.motivation || "" });
     const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
     const link = `${location.origin}${location.pathname}?c=${code}`;
     return `
+      <section class="card" id="objectif">
+        <div class="eyebrow">Mon objectif</div>
+        <h2>Ce que je vise</h2>
+        <p class="lead">Ton objectif peut évoluer en cours de route : mets-le à jour quand il change.</p>
+        <div class="field">
+          <div class="label">Poids cible</div>
+          ${numInput("obj", "poidsCible", o.poidsCible, "kg", "Ex : 65")}
+        </div>
+        <div class="field">
+          <div class="label">Ce que je veux vraiment changer</div>
+          <textarea data-obj="motivation" rows="4" aria-label="Ce que je veux vraiment changer">${esc(o.motivation)}</textarea>
+        </div>
+        ${LECTURE ? "" : `<button class="btn2" data-act="save-objectif">Mettre à jour mon objectif</button>`}
+      </section>
+
       <section class="card">
         <div class="eyebrow">À mettre à jour quand ça change</div>
         <h2>Mes repères</h2>
@@ -1440,6 +1463,18 @@
     render();
   }
 
+  function saveObjectif() {
+    const o = S.drafts.__objectif || {};
+    const res = readNums(o, ["poidsCible"]);
+    if (res.error || res.out.poidsCible === "") { toast("Vérifie ton poids cible"); return; }
+    const motivation = String(o.motivation || "").trim();
+    if (!motivation) { toast("Dis-nous ce que tu veux vraiment changer"); return; }
+    delete S.drafts.__objectif;
+    saveProfil({ poidsCible: res.out.poidsCible, motivation });
+    toast("Objectif mis à jour ✓");
+    render();
+  }
+
   function saveReperes() {
     const res = readNums(S.drafts.__reperes || {}, ["depart", "objectifPas", "maintKcal", "maintPas", "cibleProt"]);
     if (res.error) { toast("Vérifie tes repères"); return; }
@@ -1545,6 +1580,8 @@
     if (a === "next") { S.day = addDays(S.day, 1); render(); }
     if (a === "save") saveDay();
     if (a === "save-reperes") saveReperes();
+    if (a === "save-objectif") saveObjectif();
+    if (a === "go-objectif") { S.tab = "reperes"; render(); setTimeout(() => $("#objectif")?.scrollIntoView({ behavior: "smooth" }), 50); }
     if (a === "save-s1") saveS1();
     if (a === "ob-next") obNext();
     if (a === "ob-back") { S.ob.step = 1; render(); }
@@ -1576,6 +1613,7 @@
       if (el.dataset.num === "pasJour" && $("#pas-moy")) $("#pas-moy").innerHTML = pasMoyenTexte(S.day, draftFor(S.day));
     }
     if (el.dataset.rep) { (S.drafts.__reperes ||= {})[el.dataset.rep] = el.value; S.touched.__reperes = true; }
+    if (el.dataset.obj) { (S.drafts.__objectif ||= {})[el.dataset.obj] = el.value; S.touched.__objectif = true; }
     if (el.dataset.s1) { (S.drafts.__s1 ||= {})[el.dataset.s1] = el.value; }
     if (el.dataset.rappel) {
       S.drafts.__heure = el.value;
